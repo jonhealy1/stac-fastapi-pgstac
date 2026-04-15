@@ -19,7 +19,7 @@ class CatalogsDatabaseLogic:
         limit: int,
         request: Any = None,
         sort: list[dict[str, Any]] | None = None,
-    ) -> tuple[list[dict[str, Any]], str | None, int | None]:
+    ) -> tuple[list[dict[str, Any]], int | None, str | None]:
         """Retrieve a list of catalogs from PGStac, supporting pagination.
 
         Uses collection_search() pgSTAC function with CQL2 filters for API stability.
@@ -31,7 +31,7 @@ class CatalogsDatabaseLogic:
             sort (list[dict[str, Any]] | None, optional): Optional sort parameter. Defaults to None.
 
         Returns:
-            A tuple of (catalogs, next pagination token if any, optional count).
+            A tuple of (catalogs, total count, next pagination token if any).
         """
         if request is None:
             logger.debug("No request object provided to get_all_catalogs")
@@ -54,11 +54,14 @@ class CatalogsDatabaseLogic:
                 result = await conn.fetchval(q, *p)
                 catalogs = result.get("collections", []) if result else []
                 logger.info(f"Successfully fetched {len(catalogs)} catalogs")
+        except (AttributeError, KeyError, TypeError) as e:
+            logger.warning(f"Error parsing catalog search results: {e}")
+            catalogs = []
         except Exception as e:
-            logger.warning(f"Error fetching all catalogs: {e}")
+            logger.error(f"Unexpected error fetching all catalogs: {e}", exc_info=True)
             catalogs = []
 
-        return catalogs[:limit], None, len(catalogs) if catalogs else None
+        return catalogs, len(catalogs) if catalogs else None, None
 
     async def find_catalog(self, catalog_id: str, request: Any = None) -> dict[str, Any]:
         """Find a catalog by ID.
@@ -96,6 +99,46 @@ class CatalogsDatabaseLogic:
 
         return catalog
 
+    async def _check_cycle(
+        self,
+        catalog_id: str,
+        parent_id: str,
+        request: Any = None,
+    ) -> bool:
+        """Check if adding parent_id to catalog_id would create a cycle.
+
+        Args:
+            catalog_id: The catalog being linked.
+            parent_id: The proposed parent catalog ID.
+            request: The FastAPI request object.
+
+        Returns:
+            True if a cycle would be created, False otherwise.
+        """
+        if request is None:
+            return False
+
+        if catalog_id == parent_id:
+            return True
+
+        try:
+            # Get the parent catalog
+            parent = await self.find_catalog(parent_id, request=request)
+            parent_ids = parent.get("parent_ids", [])
+
+            # If parent has catalog_id as a parent, it's a cycle
+            if catalog_id in parent_ids:
+                return True
+
+            # Recursively check parent's parents
+            for pid in parent_ids:
+                if await self._check_cycle(catalog_id, pid, request):
+                    return True
+        except NotFoundError:
+            pass
+
+        return False
+
     async def create_catalog(
         self, catalog: dict[str, Any], refresh: bool = False, request: Any = None
     ) -> None:
@@ -114,6 +157,43 @@ class CatalogsDatabaseLogic:
                 await dbfunc(conn, "create_collection", dict(catalog))
         except Exception as e:
             logger.warning(f"Error creating catalog: {e}")
+
+    async def update_catalog(
+        self,
+        catalog_id: str,
+        catalog: dict[str, Any],
+        refresh: bool = False,
+        request: Any = None,
+    ) -> None:
+        """Update a catalog's metadata.
+
+        Per spec: This operation MUST NOT modify the structural links (parent_ids)
+        of the catalog unless explicitly handled, ensuring the catalog remains
+        in its current hierarchy.
+
+        Args:
+            catalog_id: The catalog ID to update.
+            catalog: The updated catalog dictionary.
+            refresh: Whether to refresh after update.
+            request: The FastAPI request object.
+        """
+        if request is None:
+            return
+
+        try:
+            # Get existing catalog to preserve parent_ids
+            existing = await self.find_catalog(catalog_id, request=request)
+            parent_ids = existing.get("parent_ids", [])
+
+            # Merge with existing data, preserving parent_ids
+            catalog["id"] = catalog_id
+            catalog["parent_ids"] = parent_ids
+
+            async with request.app.state.get_connection(request, "w") as conn:
+                await dbfunc(conn, "create_collection", dict(catalog))
+            logger.info(f"Successfully updated catalog {catalog_id}")
+        except Exception as e:
+            logger.warning(f"Error updating catalog: {e}")
 
     async def delete_catalog(
         self, catalog_id: str, refresh: bool = False, request: Any = None
@@ -157,6 +237,12 @@ class CatalogsDatabaseLogic:
         if request is None:
             return [], None, None
 
+        # Validate parent catalog exists
+        try:
+            await self.find_catalog(catalog_id, request=request)
+        except NotFoundError:
+            raise
+
         try:
             async with request.app.state.get_connection(request, "r") as conn:
                 # Use collection_search with CQL2 filter for parent_ids contains catalog_id
@@ -176,11 +262,16 @@ class CatalogsDatabaseLogic:
                 )
                 result = await conn.fetchval(q, *p)
                 children = result.get("collections", []) if result else []
+        except (AttributeError, KeyError, TypeError) as e:
+            logger.warning(f"Error parsing catalog children results: {e}")
+            children = []
         except Exception as e:
-            logger.warning(f"Error fetching catalog children: {e}")
+            logger.error(
+                f"Unexpected error fetching catalog children: {e}", exc_info=True
+            )
             children = []
 
-        return children[:limit], len(children) if children else None, None
+        return children, len(children) if children else None, None
 
     async def get_catalog_collections(
         self,
@@ -204,6 +295,12 @@ class CatalogsDatabaseLogic:
         """
         if request is None:
             return [], None, None
+
+        # Validate parent catalog exists
+        try:
+            await self.find_catalog(catalog_id, request=request)
+        except NotFoundError:
+            raise
 
         try:
             async with request.app.state.get_connection(request, "r") as conn:
@@ -230,13 +327,18 @@ class CatalogsDatabaseLogic:
                 )
                 result = await conn.fetchval(q, *p)
                 collections = result.get("collections", []) if result else []
+        except (AttributeError, KeyError, TypeError) as e:
+            logger.warning(f"Error parsing catalog collections results: {e}")
+            collections = []
         except Exception as e:
-            logger.warning(f"Error fetching catalog collections: {e}")
+            logger.error(
+                f"Unexpected error fetching catalog collections: {e}", exc_info=True
+            )
             collections = []
 
-        return collections[:limit], len(collections) if collections else None, None
+        return collections, len(collections) if collections else None, None
 
-    async def get_catalog_catalogs(
+    async def get_sub_catalogs(
         self,
         catalog_id: str,
         limit: int = 10,
@@ -258,6 +360,12 @@ class CatalogsDatabaseLogic:
         """
         if request is None:
             return [], None, None
+
+        # Validate parent catalog exists
+        try:
+            await self.find_catalog(catalog_id, request=request)
+        except NotFoundError:
+            raise
 
         try:
             async with request.app.state.get_connection(request, "r") as conn:
@@ -287,11 +395,14 @@ class CatalogsDatabaseLogic:
                 result = await conn.fetchval(q, *p)
                 catalogs = result.get("collections", []) if result else []
                 logger.debug(f"Found {len(catalogs)} sub-catalogs")
+        except (AttributeError, KeyError, TypeError) as e:
+            logger.warning(f"Error parsing sub-catalogs results: {e}")
+            catalogs = []
         except Exception as e:
-            logger.warning(f"Error fetching sub-catalogs: {e}")
+            logger.error(f"Unexpected error fetching sub-catalogs: {e}", exc_info=True)
             catalogs = []
 
-        return catalogs[:limit], len(catalogs) if catalogs else None, None
+        return catalogs, len(catalogs) if catalogs else None, None
 
     async def find_collection(
         self, collection_id: str, request: Any = None
@@ -388,10 +499,16 @@ class CatalogsDatabaseLogic:
             The collection dictionary.
 
         Raises:
-            NotFoundError: If the collection is not found.
+            NotFoundError: If the collection is not found or not linked to the catalog.
         """
         if request is None:
             raise NotFoundError(f"Collection {collection_id} not found")
+
+        # Verify catalog exists
+        try:
+            await self.find_catalog(catalog_id, request=request)
+        except NotFoundError as e:
+            raise NotFoundError(f"Catalog {catalog_id} not found") from e
 
         async with request.app.state.get_connection(request, "r") as conn:
             q, p = render(
@@ -404,6 +521,13 @@ class CatalogsDatabaseLogic:
 
         if collection is None:
             raise NotFoundError(f"Collection {collection_id} not found")
+
+        # Verify collection is linked to this catalog
+        parent_ids = collection.get("parent_ids", [])
+        if catalog_id not in parent_ids:
+            raise NotFoundError(
+                f"Collection {collection_id} not found in catalog {catalog_id}"
+            )
 
         return collection
 
@@ -485,3 +609,79 @@ class CatalogsDatabaseLogic:
             raise NotFoundError(f"Item {item_id} not found")
 
         return item
+
+    async def unlink_sub_catalog(
+        self,
+        catalog_id: str,
+        sub_catalog_id: str,
+        request: Any = None,
+    ) -> None:
+        """Unlink a sub-catalog from its parent.
+
+        Per spec: If the sub-catalog has no other parents after unlinking,
+        it MUST be automatically adopted by the Root Catalog.
+
+        Args:
+            catalog_id: The parent catalog ID.
+            sub_catalog_id: The sub-catalog ID to unlink.
+            request: The FastAPI request object.
+        """
+        if request is None:
+            return
+
+        try:
+            # Get the sub-catalog
+            sub_catalog = await self.find_catalog(sub_catalog_id, request=request)
+            parent_ids = sub_catalog.get("parent_ids", [])
+
+            # Remove the parent from parent_ids
+            if catalog_id in parent_ids:
+                parent_ids = [p for p in parent_ids if p != catalog_id]
+
+            # If no other parents, adopt to root (empty parent_ids means root)
+            sub_catalog["parent_ids"] = parent_ids
+
+            # Update the catalog
+            await self.create_catalog(sub_catalog, refresh=True, request=request)
+            logger.info(f"Unlinked sub-catalog {sub_catalog_id} from parent {catalog_id}")
+        except Exception as e:
+            logger.warning(f"Error unlinking sub-catalog: {e}")
+
+    async def unlink_collection(
+        self,
+        catalog_id: str,
+        collection_id: str,
+        request: Any = None,
+    ) -> None:
+        """Unlink a collection from a catalog.
+
+        Per spec: If the collection has no other parents after unlinking,
+        it MUST be automatically adopted by the Root Catalog.
+
+        Args:
+            catalog_id: The parent catalog ID.
+            collection_id: The collection ID to unlink.
+            request: The FastAPI request object.
+        """
+        if request is None:
+            return
+
+        try:
+            # Get the collection
+            collection = await self.find_collection(collection_id, request=request)
+            parent_ids = collection.get("parent_ids", [])
+
+            # Remove the parent from parent_ids
+            if catalog_id in parent_ids:
+                parent_ids = [p for p in parent_ids if p != catalog_id]
+
+            # If no other parents, adopt to root (empty parent_ids means root)
+            collection["parent_ids"] = parent_ids
+
+            # Update the collection
+            await self.update_collection(
+                collection_id, collection, refresh=True, request=request
+            )
+            logger.info(f"Unlinked collection {collection_id} from catalog {catalog_id}")
+        except Exception as e:
+            logger.warning(f"Error unlinking collection: {e}")

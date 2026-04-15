@@ -37,7 +37,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
     ) -> JSONResponse:
         """Get all catalogs."""
         limit = limit or 10
-        catalogs_list, next_token, total_hits = await self.database.get_all_catalogs(
+        catalogs_list, total_hits, next_token = await self.database.get_all_catalogs(
             token=token,
             limit=limit,
             request=request,
@@ -63,7 +63,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                 parent_ids = catalog.get("parent_ids", [])
 
                 # Get child catalogs (catalogs that have this catalog in their parent_ids)
-                child_catalogs, _, _ = await self.database.get_catalog_catalogs(
+                child_catalogs, _, _ = await self.database.get_sub_catalogs(
                     catalog_id=catalog_id,
                     limit=1000,  # Get all children for link generation
                     request=request,
@@ -175,7 +175,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             raise NotFoundError(f"Catalog {catalog_id} not found") from e
 
         limit = limit or 10
-        catalogs_list, total_hits, next_token = await self.database.get_catalog_catalogs(
+        catalogs_list, total_hits, next_token = await self.database.get_sub_catalogs(
             catalog_id=catalog_id,
             limit=limit,
             token=token,
@@ -219,6 +219,13 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         try:
             # Try to find existing catalog
             existing = await self.database.find_catalog(cat_id, request=request)
+
+            # Check for cycles before linking
+            if await self.database._check_cycle(cat_id, catalog_id, request=request):
+                raise ValueError(
+                    f"Cannot link catalog {cat_id} as child of {catalog_id}: would create a cycle"
+                )
+
             # Link existing catalog - add parent_id if not already present
             parent_ids = existing.get("parent_ids", [])
             if not isinstance(parent_ids, list):
