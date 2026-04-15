@@ -7,24 +7,86 @@ import pytest
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.asyncio
-async def test_create_catalog(app_client):
-    """Test creating a catalog."""
-
+# Helper functions to reduce test duplication
+async def create_catalog(
+    app_client, catalog_id, title="Test Catalog", description="A test catalog"
+):
+    """Helper to create a catalog."""
     catalog_data = {
-        "id": "test-catalog",
+        "id": catalog_id,
         "type": "Catalog",
-        "description": "A test catalog",
+        "title": title,
+        "description": description,
         "stac_version": "1.0.0",
         "links": [],
     }
+    resp = await app_client.post("/catalogs", json=catalog_data)
+    assert resp.status_code == 201
+    return resp.json()
 
+
+async def create_sub_catalog(app_client, parent_id, sub_id, description="A sub-catalog"):
+    """Helper to create a sub-catalog."""
+    sub_data = {
+        "id": sub_id,
+        "type": "Catalog",
+        "description": description,
+        "stac_version": "1.0.0",
+        "links": [],
+    }
+    resp = await app_client.post(f"/catalogs/{parent_id}/catalogs", json=sub_data)
+    assert resp.status_code == 201
+    return resp.json()
+
+
+async def create_collection(app_client, collection_id, description="Test collection"):
+    """Helper to create a collection."""
+    collection_data = {
+        "id": collection_id,
+        "type": "Collection",
+        "description": description,
+        "stac_version": "1.0.0",
+        "license": "proprietary",
+        "extent": {
+            "spatial": {"bbox": [[-180, -90, 180, 90]]},
+            "temporal": {"interval": [[None, None]]},
+        },
+        "links": [],
+    }
+    resp = await app_client.post("/collections", json=collection_data)
+    assert resp.status_code == 201
+    return resp.json()
+
+
+async def create_catalog_collection(
+    app_client, catalog_id, collection_id, description="Test collection"
+):
+    """Helper to create a collection in a catalog."""
+    collection_data = {
+        "id": collection_id,
+        "type": "Collection",
+        "description": description,
+        "stac_version": "1.0.0",
+        "license": "proprietary",
+        "extent": {
+            "spatial": {"bbox": [[-180, -90, 180, 90]]},
+            "temporal": {"interval": [[None, None]]},
+        },
+        "links": [],
+    }
     resp = await app_client.post(
-        "/catalogs",
-        json=catalog_data,
+        f"/catalogs/{catalog_id}/collections", json=collection_data
     )
     assert resp.status_code == 201
-    created_catalog = resp.json()
+    return resp.json()
+
+
+@pytest.mark.asyncio
+async def test_create_catalog(app_client):
+    """Test creating a catalog."""
+    created_catalog = await create_catalog(
+        app_client, "test-catalog", description="A test catalog"
+    )
     assert created_catalog["id"] == "test-catalog"
     assert created_catalog["type"] == "Catalog"
     assert created_catalog["description"] == "A test catalog"
@@ -36,19 +98,9 @@ async def test_get_all_catalogs(app_client):
     # Create three catalogs
     catalog_ids = ["test-catalog-1", "test-catalog-2", "test-catalog-3"]
     for catalog_id in catalog_ids:
-        catalog_data = {
-            "id": catalog_id,
-            "type": "Catalog",
-            "description": f"Test catalog {catalog_id}",
-            "stac_version": "1.0.0",
-            "links": [],
-        }
-
-        resp = await app_client.post(
-            "/catalogs",
-            json=catalog_data,
+        await create_catalog(
+            app_client, catalog_id, description=f"Test catalog {catalog_id}"
         )
-        assert resp.status_code == 201
 
     # Now get all catalogs
     resp = await app_client.get("/catalogs")
@@ -68,19 +120,9 @@ async def test_get_all_catalogs(app_client):
 async def test_get_catalog_by_id(app_client):
     """Test getting a specific catalog by ID."""
     # First create a catalog
-    catalog_data = {
-        "id": "test-catalog-get",
-        "type": "Catalog",
-        "description": "A test catalog for getting",
-        "stac_version": "1.0.0",
-        "links": [],
-    }
-
-    resp = await app_client.post(
-        "/catalogs",
-        json=catalog_data,
+    await create_catalog(
+        app_client, "test-catalog-get", description="A test catalog for getting"
     )
-    assert resp.status_code == 201
 
     # Now get the specific catalog
     resp = await app_client.get("/catalogs/test-catalog-get")
@@ -102,35 +144,12 @@ async def test_get_nonexistent_catalog(app_client):
 async def test_create_sub_catalog(app_client):
     """Test creating a sub-catalog."""
     # First create a parent catalog
-    parent_catalog_data = {
-        "id": "parent-catalog",
-        "type": "Catalog",
-        "description": "A parent catalog",
-        "stac_version": "1.0.0",
-        "links": [],
-    }
-
-    resp = await app_client.post(
-        "/catalogs",
-        json=parent_catalog_data,
-    )
-    assert resp.status_code == 201
+    await create_catalog(app_client, "parent-catalog", description="A parent catalog")
 
     # Now create a sub-catalog
-    sub_catalog_data = {
-        "id": "sub-catalog-1",
-        "type": "Catalog",
-        "description": "A sub-catalog",
-        "stac_version": "1.0.0",
-        "links": [],
-    }
-
-    resp = await app_client.post(
-        "/catalogs/parent-catalog/catalogs",
-        json=sub_catalog_data,
+    created_sub_catalog = await create_sub_catalog(
+        app_client, "parent-catalog", "sub-catalog-1", description="A sub-catalog"
     )
-    assert resp.status_code == 201
-    created_sub_catalog = resp.json()
     assert created_sub_catalog["id"] == "sub-catalog-1"
     assert created_sub_catalog["type"] == "Catalog"
     assert "parent_ids" in created_sub_catalog
@@ -141,36 +160,16 @@ async def test_create_sub_catalog(app_client):
 async def test_get_sub_catalogs(app_client):
     """Test getting sub-catalogs of a parent catalog."""
     # Create a parent catalog
-    parent_catalog_data = {
-        "id": "parent-catalog-2",
-        "type": "Catalog",
-        "description": "A parent catalog for sub-catalogs",
-        "stac_version": "1.0.0",
-        "links": [],
-    }
-
-    resp = await app_client.post(
-        "/catalogs",
-        json=parent_catalog_data,
+    await create_catalog(
+        app_client, "parent-catalog-2", description="A parent catalog for sub-catalogs"
     )
-    assert resp.status_code == 201
 
     # Create multiple sub-catalogs
     sub_catalog_ids = ["sub-cat-1", "sub-cat-2", "sub-cat-3"]
     for sub_id in sub_catalog_ids:
-        sub_catalog_data = {
-            "id": sub_id,
-            "type": "Catalog",
-            "description": f"Sub-catalog {sub_id}",
-            "stac_version": "1.0.0",
-            "links": [],
-        }
-
-        resp = await app_client.post(
-            "/catalogs/parent-catalog-2/catalogs",
-            json=sub_catalog_data,
+        await create_sub_catalog(
+            app_client, "parent-catalog-2", sub_id, description=f"Sub-catalog {sub_id}"
         )
-        assert resp.status_code == 201
 
     # Get all sub-catalogs
     resp = await app_client.get("/catalogs/parent-catalog-2/catalogs")
@@ -206,34 +205,17 @@ async def test_get_sub_catalogs(app_client):
 async def test_sub_catalog_links(app_client):
     """Test that sub-catalogs have correct parent links."""
     # Create a parent catalog
-    parent_catalog_data = {
-        "id": "parent-for-links",
-        "type": "Catalog",
-        "description": "Parent catalog for link testing",
-        "stac_version": "1.0.0",
-        "links": [],
-    }
-
-    resp = await app_client.post(
-        "/catalogs",
-        json=parent_catalog_data,
+    await create_catalog(
+        app_client, "parent-for-links", description="Parent catalog for link testing"
     )
-    assert resp.status_code == 201
 
     # Create a sub-catalog
-    sub_catalog_data = {
-        "id": "sub-for-links",
-        "type": "Catalog",
-        "description": "Sub-catalog for link testing",
-        "stac_version": "1.0.0",
-        "links": [],
-    }
-
-    resp = await app_client.post(
-        "/catalogs/parent-for-links/catalogs",
-        json=sub_catalog_data,
+    await create_sub_catalog(
+        app_client,
+        "parent-for-links",
+        "sub-for-links",
+        description="Sub-catalog for link testing",
     )
-    assert resp.status_code == 201
 
     # Get the sub-catalog directly
     resp = await app_client.get("/catalogs/sub-for-links")
@@ -462,16 +444,12 @@ async def test_parent_ids_not_exposed_in_response(app_client):
 async def test_update_catalog(app_client):
     """Test updating a catalog's metadata."""
     # Create a catalog
-    catalog_data = {
-        "id": "catalog-to-update",
-        "type": "Catalog",
-        "title": "Original Title",
-        "description": "Original description",
-        "stac_version": "1.0.0",
-        "links": [],
-    }
-    resp = await app_client.post("/catalogs", json=catalog_data)
-    assert resp.status_code == 201
+    await create_catalog(
+        app_client,
+        "catalog-to-update",
+        title="Original Title",
+        description="Original description",
+    )
 
     # Update the catalog
     updated_data = {
@@ -493,28 +471,17 @@ async def test_update_catalog(app_client):
 async def test_update_catalog_preserves_parent_ids(app_client):
     """Test that updating a catalog preserves parent_ids."""
     # Create parent catalog
-    parent_data = {
-        "id": "parent-for-update-test",
-        "type": "Catalog",
-        "description": "Parent catalog",
-        "stac_version": "1.0.0",
-        "links": [],
-    }
-    resp = await app_client.post("/catalogs", json=parent_data)
-    assert resp.status_code == 201
+    await create_catalog(
+        app_client, "parent-for-update-test", description="Parent catalog"
+    )
 
     # Create child catalog
-    child_data = {
-        "id": "child-for-update-test",
-        "type": "Catalog",
-        "description": "Child catalog",
-        "stac_version": "1.0.0",
-        "links": [],
-    }
-    resp = await app_client.post(
-        "/catalogs/parent-for-update-test/catalogs", json=child_data
+    await create_sub_catalog(
+        app_client,
+        "parent-for-update-test",
+        "child-for-update-test",
+        description="Child catalog",
     )
-    assert resp.status_code == 201
 
     # Update the child catalog
     updated_child = {
@@ -543,26 +510,12 @@ async def test_update_catalog_preserves_parent_ids(app_client):
 async def test_unlink_sub_catalog(app_client):
     """Test unlinking a sub-catalog from its parent."""
     # Create parent catalog
-    parent_data = {
-        "id": "parent-for-unlink",
-        "type": "Catalog",
-        "description": "Parent catalog",
-        "stac_version": "1.0.0",
-        "links": [],
-    }
-    resp = await app_client.post("/catalogs", json=parent_data)
-    assert resp.status_code == 201
+    await create_catalog(app_client, "parent-for-unlink", description="Parent catalog")
 
     # Create sub-catalog
-    sub_data = {
-        "id": "sub-for-unlink",
-        "type": "Catalog",
-        "description": "Sub-catalog",
-        "stac_version": "1.0.0",
-        "links": [],
-    }
-    resp = await app_client.post("/catalogs/parent-for-unlink/catalogs", json=sub_data)
-    assert resp.status_code == 201
+    await create_sub_catalog(
+        app_client, "parent-for-unlink", "sub-for-unlink", description="Sub-catalog"
+    )
 
     # Verify sub-catalog is linked
     resp = await app_client.get("/catalogs/parent-for-unlink/catalogs")
@@ -584,34 +537,19 @@ async def test_unlink_sub_catalog(app_client):
 async def test_unlink_collection_from_catalog(app_client):
     """Test unlinking a collection from a catalog."""
     # Create a catalog
-    catalog_data = {
-        "id": "catalog-for-collection-unlink",
-        "type": "Catalog",
-        "description": "Catalog for collection unlink test",
-        "stac_version": "1.0.0",
-        "links": [],
-    }
-    resp = await app_client.post("/catalogs", json=catalog_data)
-    assert resp.status_code == 201
+    await create_catalog(
+        app_client,
+        "catalog-for-collection-unlink",
+        description="Catalog for collection unlink test",
+    )
 
     # Create a collection in the catalog
-    collection_data = {
-        "id": "collection-for-unlink",
-        "type": "Collection",
-        "description": "Test collection",
-        "stac_version": "1.0.0",
-        "license": "proprietary",
-        "extent": {
-            "spatial": {"bbox": [[-180, -90, 180, 90]]},
-            "temporal": {"interval": [[None, None]]},
-        },
-        "links": [],
-    }
-    resp = await app_client.post(
-        "/catalogs/catalog-for-collection-unlink/collections",
-        json=collection_data,
+    await create_catalog_collection(
+        app_client,
+        "catalog-for-collection-unlink",
+        "collection-for-unlink",
+        description="Test collection",
     )
-    assert resp.status_code == 201
 
     # Verify collection is linked
     resp = await app_client.get("/catalogs/catalog-for-collection-unlink/collections")
@@ -639,26 +577,12 @@ async def test_unlink_collection_from_catalog(app_client):
 async def test_cycle_prevention(app_client):
     """Test that circular references are prevented."""
     # Create catalog A
-    catalog_a = {
-        "id": "catalog-a-cycle",
-        "type": "Catalog",
-        "description": "Catalog A",
-        "stac_version": "1.0.0",
-        "links": [],
-    }
-    resp = await app_client.post("/catalogs", json=catalog_a)
-    assert resp.status_code == 201
+    await create_catalog(app_client, "catalog-a-cycle", description="Catalog A")
 
     # Create catalog B as child of A
-    catalog_b = {
-        "id": "catalog-b-cycle",
-        "type": "Catalog",
-        "description": "Catalog B",
-        "stac_version": "1.0.0",
-        "links": [],
-    }
-    resp = await app_client.post("/catalogs/catalog-a-cycle/catalogs", json=catalog_b)
-    assert resp.status_code == 201
+    await create_sub_catalog(
+        app_client, "catalog-a-cycle", "catalog-b-cycle", description="Catalog B"
+    )
 
     # Try to link A as a child of B (would create a cycle)
     # Note: Cycle prevention is implemented but may not be fully enforced in all cases
@@ -673,31 +597,16 @@ async def test_cycle_prevention(app_client):
 async def test_get_catalog_collection_validates_link(app_client):
     """Test that getting a scoped collection validates the link."""
     # Create a catalog
-    catalog_data = {
-        "id": "catalog-for-collection-validation",
-        "type": "Catalog",
-        "description": "Catalog for validation test",
-        "stac_version": "1.0.0",
-        "links": [],
-    }
-    resp = await app_client.post("/catalogs", json=catalog_data)
-    assert resp.status_code == 201
+    await create_catalog(
+        app_client,
+        "catalog-for-collection-validation",
+        description="Catalog for validation test",
+    )
 
     # Create a collection NOT linked to the catalog
-    collection_data = {
-        "id": "unlinked-collection",
-        "type": "Collection",
-        "description": "Unlinked collection",
-        "stac_version": "1.0.0",
-        "license": "proprietary",
-        "extent": {
-            "spatial": {"bbox": [[-180, -90, 180, 90]]},
-            "temporal": {"interval": [[None, None]]},
-        },
-        "links": [],
-    }
-    resp = await app_client.post("/collections", json=collection_data)
-    assert resp.status_code == 201
+    await create_collection(
+        app_client, "unlinked-collection", description="Unlinked collection"
+    )
 
     # Try to get the unlinked collection via the catalog endpoint
     resp = await app_client.get(
@@ -735,46 +644,38 @@ async def test_get_catalog_collections_validates_parent(app_client):
 async def test_poly_hierarchy_collection(app_client):
     """Test poly-hierarchy: collection linked to multiple catalogs."""
     # Create two catalogs
-    catalog1_data = {
-        "id": "catalog-1-poly",
-        "type": "Catalog",
-        "description": "First catalog",
-        "stac_version": "1.0.0",
-        "links": [],
-    }
-    resp = await app_client.post("/catalogs", json=catalog1_data)
-    assert resp.status_code == 201
-
-    catalog2_data = {
-        "id": "catalog-2-poly",
-        "type": "Catalog",
-        "description": "Second catalog",
-        "stac_version": "1.0.0",
-        "links": [],
-    }
-    resp = await app_client.post("/catalogs", json=catalog2_data)
-    assert resp.status_code == 201
+    await create_catalog(app_client, "catalog-1-poly", description="First catalog")
+    await create_catalog(app_client, "catalog-2-poly", description="Second catalog")
 
     # Create a collection in catalog 1
-    collection_data = {
-        "id": "shared-collection-poly",
-        "type": "Collection",
-        "description": "Shared collection",
-        "stac_version": "1.0.0",
-        "license": "proprietary",
-        "extent": {
-            "spatial": {"bbox": [[-180, -90, 180, 90]]},
-            "temporal": {"interval": [[None, None]]},
-        },
-        "links": [],
-    }
-    resp = await app_client.post(
-        "/catalogs/catalog-1-poly/collections", json=collection_data
+    await create_catalog_collection(
+        app_client,
+        "catalog-1-poly",
+        "shared-collection-poly",
+        description="Shared collection",
     )
-    assert resp.status_code == 201
 
     # Verify collection is in catalog 1
     resp = await app_client.get("/catalogs/catalog-1-poly/collections")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert any(col.get("id") == "shared-collection-poly" for col in data["collections"])
+
+    # Link the same collection to catalog 2 (poly-hierarchy)
+    collection_ref = {"id": "shared-collection-poly"}
+    resp = await app_client.post(
+        "/catalogs/catalog-2-poly/collections", json=collection_ref
+    )
+    assert resp.status_code in [200, 201]
+
+    # Verify collection is in catalog 1
+    resp = await app_client.get("/catalogs/catalog-1-poly/collections")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert any(col.get("id") == "shared-collection-poly" for col in data["collections"])
+
+    # Verify collection is also in catalog 2 (poly-hierarchy)
+    resp = await app_client.get("/catalogs/catalog-2-poly/collections")
     assert resp.status_code == 200
     data = resp.json()
     assert any(col.get("id") == "shared-collection-poly" for col in data["collections"])
