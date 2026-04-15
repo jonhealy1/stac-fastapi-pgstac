@@ -250,7 +250,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         """Create a collection in a catalog.
 
         Creates a new collection or links an existing collection to a catalog.
-        Maintains a list of parent IDs in the collection's parent_ids field.
+        Maintains a list of parent IDs in the collection's parent_ids field (poly-hierarchy).
         """
         # Convert Pydantic model to dict if needed
         if hasattr(collection, "model_dump"):
@@ -260,22 +260,30 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                 dict(collection) if not isinstance(collection, dict) else collection
             )
 
-        # Initialize or append to parent_ids list
-        if "parent_ids" not in collection_dict:
-            collection_dict["parent_ids"] = [catalog_id]
-        else:
-            # Ensure parent_ids is a list and add the new parent if not already present
-            parent_ids = collection_dict.get("parent_ids", [])
+        coll_id = collection_dict.get("id")
+
+        try:
+            # Try to find existing collection
+            existing = await self.database.find_collection(coll_id, request=request)
+            # Link existing collection - add parent_id if not already present (poly-hierarchy)
+            parent_ids = existing.get("parent_ids", [])
             if not isinstance(parent_ids, list):
                 parent_ids = [parent_ids]
             if catalog_id not in parent_ids:
                 parent_ids.append(catalog_id)
-            collection_dict["parent_ids"] = parent_ids
-
-        await self.database.create_collection(
-            collection_dict, refresh=True, request=request
-        )
-        return JSONResponse(content=collection_dict, status_code=201)
+            existing["parent_ids"] = parent_ids
+            await self.database.update_collection(
+                coll_id, existing, refresh=True, request=request
+            )
+            return JSONResponse(content=existing, status_code=200)
+        except Exception:
+            # Create new collection
+            collection_dict["type"] = "Collection"
+            collection_dict["parent_ids"] = [catalog_id]
+            await self.database.create_collection(
+                collection_dict, refresh=True, request=request
+            )
+            return JSONResponse(content=collection_dict, status_code=201)
 
     async def get_catalog_collection(
         self,
