@@ -57,8 +57,13 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         # Generate links dynamically for each catalog
         if request and catalogs_list:
             for catalog in catalogs_list:
-                catalog_id = catalog.get("id")
-                parent_ids = catalog.get("parent_ids", [])
+                catalog_id = cast(str, catalog.get("id"))
+                parent_ids_raw = catalog.get("parent_ids", [])
+                parent_ids: list[str] = (
+                    cast(list[str], parent_ids_raw)
+                    if isinstance(parent_ids_raw, list)
+                    else ([cast(str, parent_ids_raw)] if parent_ids_raw else [])
+                )
 
                 # Get child catalogs for link generation
                 child_catalogs, _, _ = await self.database.get_sub_catalogs(
@@ -66,8 +71,10 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                     limit=1000,
                     request=request,
                 )
-                child_catalog_ids = (
-                    [c.get("id") for c in child_catalogs] if child_catalogs else []
+                child_catalog_ids: list[str] = (
+                    [cast(str, c.get("id")) for c in child_catalogs]
+                    if child_catalogs
+                    else []
                 )
 
                 # Generate links
@@ -110,7 +117,12 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             catalog = await self.database.find_catalog(catalog_id, request=request)
 
             if request:
-                parent_ids = catalog.get("parent_ids", [])
+                parent_ids_raw = catalog.get("parent_ids", [])
+                parent_ids: list[str] = (
+                    cast(list[str], parent_ids_raw)
+                    if isinstance(parent_ids_raw, list)
+                    else ([cast(str, parent_ids_raw)] if parent_ids_raw else [])
+                )
 
                 # Get child catalogs (catalogs that have this catalog in their parent_ids)
                 child_catalogs, _, _ = await self.database.get_sub_catalogs(
@@ -118,8 +130,10 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                     limit=1000,  # Get all children for link generation
                     request=request,
                 )
-                child_catalog_ids = (
-                    [c.get("id") for c in child_catalogs] if child_catalogs else []
+                child_catalog_ids: list[str] = (
+                    [cast(str, c.get("id")) for c in child_catalogs]
+                    if child_catalogs
+                    else []
                 )
 
                 catalog["links"] = await CatalogLinks(
@@ -167,8 +181,13 @@ class CatalogsClient(AsyncBaseCatalogsClient):
 
         # Generate links dynamically for response
         if request:
-            catalog_id = catalog_dict.get("id")
-            parent_ids = catalog_dict.get("parent_ids", [])
+            catalog_id = cast(str, catalog_dict.get("id"))
+            parent_ids_raw = catalog_dict.get("parent_ids", [])
+            parent_ids: list[str] = (
+                cast(list[str], parent_ids_raw)
+                if isinstance(parent_ids_raw, list)
+                else ([cast(str, parent_ids_raw)] if parent_ids_raw else [])
+            )
 
             # Get child catalogs for link generation
             child_catalogs, _, _ = await self.database.get_sub_catalogs(
@@ -176,8 +195,8 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                 limit=1000,
                 request=request,
             )
-            child_catalog_ids = (
-                [c.get("id") for c in child_catalogs] if child_catalogs else []
+            child_catalog_ids: list[str] = (
+                [cast(str, c.get("id")) for c in child_catalogs] if child_catalogs else []
             )
 
             # Generate links
@@ -189,7 +208,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             ).get_links(extra_links=catalog_dict.get("links"))
 
         # Remove internal metadata before returning
-        catalog_dict.pop("parent_ids", None)
+        catalog_dict.pop("parent_ids", None)  # type: ignore
 
         return JSONResponse(content=catalog_dict, status_code=201)
 
