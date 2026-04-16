@@ -35,7 +35,17 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         request: Request | None = None,
         **kwargs,
     ) -> JSONResponse:
-        """Get all catalogs."""
+        """Get all catalogs with pagination.
+
+        Args:
+            limit: The maximum number of catalogs to return.
+            token: The pagination token.
+            request: The FastAPI request object.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            JSONResponse containing catalogs list, total count, and pagination info.
+        """
         limit = limit or 10
         catalogs_list, total_hits, next_token = await self.database.get_all_catalogs(
             token=token,
@@ -55,7 +65,19 @@ class CatalogsClient(AsyncBaseCatalogsClient):
     async def get_catalog(
         self, catalog_id: str, request: Request | None = None, **kwargs
     ) -> JSONResponse:
-        """Get a specific catalog by ID."""
+        """Get a specific catalog by ID.
+
+        Args:
+            catalog_id: The ID of the catalog to retrieve.
+            request: The FastAPI request object.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            JSONResponse containing the catalog with generated links.
+
+        Raises:
+            NotFoundError: If the catalog is not found.
+        """
         try:
             catalog = await self.database.find_catalog(catalog_id, request=request)
 
@@ -89,7 +111,16 @@ class CatalogsClient(AsyncBaseCatalogsClient):
     async def create_catalog(
         self, catalog: dict, request: Request | None = None, **kwargs
     ) -> stac_types.Catalog:
-        """Create a new catalog."""
+        """Create a new catalog.
+
+        Args:
+            catalog: The catalog dictionary or Pydantic model.
+            request: The FastAPI request object.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The created catalog.
+        """
         # Convert Pydantic model to dict if needed
         catalog_dict = cast(
             stac_types.Catalog,
@@ -106,7 +137,17 @@ class CatalogsClient(AsyncBaseCatalogsClient):
     async def update_catalog(
         self, catalog_id: str, catalog: dict, request: Request | None = None, **kwargs
     ) -> stac_types.Catalog:
-        """Update an existing catalog."""
+        """Update an existing catalog.
+
+        Args:
+            catalog_id: The ID of the catalog to update.
+            catalog: The updated catalog dictionary or Pydantic model.
+            request: The FastAPI request object.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The updated catalog.
+        """
         # Convert Pydantic model to dict if needed
         catalog_dict = cast(
             stac_types.Catalog,
@@ -123,7 +164,13 @@ class CatalogsClient(AsyncBaseCatalogsClient):
     async def delete_catalog(
         self, catalog_id: str, request: Request | None = None, **kwargs
     ) -> None:
-        """Delete a catalog."""
+        """Delete a catalog.
+
+        Args:
+            catalog_id: The ID of the catalog to delete.
+            request: The FastAPI request object.
+            **kwargs: Additional keyword arguments.
+        """
         await self.database.delete_catalog(catalog_id, refresh=True, request=request)
 
     async def get_catalog_collections(
@@ -134,7 +181,18 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         request: Request | None = None,
         **kwargs,
     ) -> JSONResponse:
-        """Get collections in a catalog."""
+        """Get collections linked to a catalog.
+
+        Args:
+            catalog_id: The ID of the catalog.
+            limit: The maximum number of collections to return.
+            token: The pagination token.
+            request: The FastAPI request object.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            JSONResponse containing collections list, total count, and pagination info.
+        """
         limit = limit or 10
         (
             collections_list,
@@ -163,7 +221,21 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         request: Request | None = None,
         **kwargs,
     ) -> JSONResponse:
-        """Get all sub-catalogs of a specific catalog with pagination."""
+        """Get all sub-catalogs of a specific catalog with pagination.
+
+        Args:
+            catalog_id: The ID of the parent catalog.
+            limit: The maximum number of sub-catalogs to return.
+            token: The pagination token.
+            request: The FastAPI request object.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            JSONResponse containing sub-catalogs list, total count, and pagination info.
+
+        Raises:
+            NotFoundError: If the parent catalog is not found.
+        """
         # Validate catalog exists
         try:
             catalog = await self.database.find_catalog(catalog_id, request=request)
@@ -207,6 +279,21 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         """Create a new catalog or link an existing catalog as a sub-catalog.
 
         Maintains a list of parent IDs in the catalog's parent_ids field.
+        Supports two modes:
+        - Mode A (Creation): Full Catalog JSON body with id that doesn't exist → creates new catalog
+        - Mode B (Linking): Minimal body with just id of existing catalog → links to parent
+
+        Args:
+            catalog_id: The ID of the parent catalog.
+            catalog: Create or link (full Catalog or ObjectUri with id).
+            request: The FastAPI request object.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            JSONResponse containing the created or linked catalog.
+
+        Raises:
+            ValueError: If linking would create a cycle.
         """
         # Convert Pydantic model to dict if needed
         if hasattr(catalog, "model_dump"):
@@ -251,6 +338,19 @@ class CatalogsClient(AsyncBaseCatalogsClient):
 
         Creates a new collection or links an existing collection to a catalog.
         Maintains a list of parent IDs in the collection's parent_ids field (poly-hierarchy).
+
+        Supports two modes:
+        - Mode A (Creation): Full Collection JSON body with id that doesn't exist → creates new collection
+        - Mode B (Linking): Minimal body with just id of existing collection → links to catalog
+
+        Args:
+            catalog_id: The ID of the catalog to link the collection to.
+            collection: Create or link (full Collection or ObjectUri with id).
+            request: The FastAPI request object.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            JSONResponse containing the created or linked collection.
         """
         # Convert Pydantic model to dict if needed
         if hasattr(collection, "model_dump"):
@@ -292,7 +392,17 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         request: Request | None = None,
         **kwargs,
     ) -> JSONResponse:
-        """Get a collection from a catalog."""
+        """Get a collection from a catalog.
+
+        Args:
+            catalog_id: The ID of the catalog.
+            collection_id: The ID of the collection.
+            request: The FastAPI request object.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            JSONResponse containing the collection.
+        """
         collection = await self.database.get_catalog_collection(
             catalog_id=catalog_id,
             collection_id=collection_id,
@@ -307,7 +417,14 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         request: Request | None = None,
         **kwargs,
     ) -> None:
-        """Unlink a collection from a catalog."""
+        """Unlink a collection from a catalog.
+
+        Args:
+            catalog_id: The ID of the catalog.
+            collection_id: The ID of the collection to unlink.
+            request: The FastAPI request object.
+            **kwargs: Additional keyword arguments.
+        """
         collection = await self.database.get_catalog_collection(
             catalog_id=catalog_id,
             collection_id=collection_id,
@@ -330,7 +447,19 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         request: Request | None = None,
         **kwargs,
     ) -> JSONResponse:
-        """Get items from a collection in a catalog."""
+        """Get items from a collection in a catalog.
+
+        Args:
+            catalog_id: The ID of the catalog.
+            collection_id: The ID of the collection.
+            limit: The maximum number of items to return.
+            token: The pagination token.
+            request: The FastAPI request object.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            JSONResponse containing items as a FeatureCollection.
+        """
         limit = limit or 10
         items, total, next_token = await self.database.get_catalog_collection_items(
             catalog_id=catalog_id,
@@ -357,7 +486,18 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         request: Request | None = None,
         **kwargs,
     ) -> JSONResponse:
-        """Get a specific item from a collection in a catalog."""
+        """Get a specific item from a collection in a catalog.
+
+        Args:
+            catalog_id: The ID of the catalog.
+            collection_id: The ID of the collection.
+            item_id: The ID of the item.
+            request: The FastAPI request object.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            JSONResponse containing the item.
+        """
         item = await self.database.get_catalog_collection_item(
             catalog_id=catalog_id,
             collection_id=collection_id,
@@ -374,7 +514,18 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         request: Request | None = None,
         **kwargs,
     ) -> JSONResponse:
-        """Get all children of a catalog."""
+        """Get all children (catalogs and collections) of a catalog.
+
+        Args:
+            catalog_id: The ID of the catalog.
+            limit: The maximum number of children to return.
+            token: The pagination token.
+            request: The FastAPI request object.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            JSONResponse containing children list, total count, and pagination info.
+        """
         limit = limit or 10
         children_list, total_hits, next_token = await self.database.get_catalog_children(
             catalog_id=catalog_id,
@@ -394,7 +545,16 @@ class CatalogsClient(AsyncBaseCatalogsClient):
     async def get_catalog_conformance(
         self, catalog_id: str, request: Request | None = None, **kwargs
     ) -> JSONResponse:
-        """Get conformance classes for a catalog."""
+        """Get conformance classes for a catalog.
+
+        Args:
+            catalog_id: The ID of the catalog.
+            request: The FastAPI request object.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            JSONResponse containing conformance classes.
+        """
         return JSONResponse(
             content={
                 "conformsTo": [
@@ -407,7 +567,16 @@ class CatalogsClient(AsyncBaseCatalogsClient):
     async def get_catalog_queryables(
         self, catalog_id: str, request: Request | None = None, **kwargs
     ) -> JSONResponse:
-        """Get queryables for a catalog."""
+        """Get queryables for a catalog.
+
+        Args:
+            catalog_id: The ID of the catalog.
+            request: The FastAPI request object.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            JSONResponse containing queryables.
+        """
         return JSONResponse(content={"queryables": []})
 
     async def unlink_sub_catalog(
@@ -417,7 +586,17 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         request: Request | None = None,
         **kwargs,
     ) -> None:
-        """Unlink a sub-catalog from its parent."""
+        """Unlink a sub-catalog from its parent.
+
+        Per spec: If the sub-catalog has no other parents after unlinking,
+        it is automatically adopted by the Root Catalog.
+
+        Args:
+            catalog_id: The ID of the parent catalog.
+            sub_catalog_id: The ID of the sub-catalog to unlink.
+            request: The FastAPI request object.
+            **kwargs: Additional keyword arguments.
+        """
         sub_catalog = await self.database.find_catalog(sub_catalog_id, request=request)
         if "parent_ids" in sub_catalog:
             sub_catalog["parent_ids"] = [

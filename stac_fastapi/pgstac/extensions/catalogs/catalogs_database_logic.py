@@ -20,18 +20,18 @@ class CatalogsDatabaseLogic:
         request: Any = None,
         sort: list[dict[str, Any]] | None = None,
     ) -> tuple[list[dict[str, Any]], int | None, str | None]:
-        """Retrieve a list of catalogs from PGStac, supporting pagination.
+        """Retrieve all catalogs with pagination.
 
         Uses collection_search() pgSTAC function with CQL2 filters for API stability.
 
         Args:
-            token (str | None): The pagination token.
-            limit (int): The number of results to return.
-            request (Any, optional): The FastAPI request object. Defaults to None.
-            sort (list[dict[str, Any]] | None, optional): Optional sort parameter. Defaults to None.
+            token: The pagination token.
+            limit: The number of results to return.
+            request: The FastAPI request object.
+            sort: Optional sort parameter.
 
         Returns:
-            A tuple of (catalogs, total count, next pagination token if any).
+            A tuple of (catalogs list, total count, next pagination token if any).
         """
         if request is None:
             logger.debug("No request object provided to get_all_catalogs")
