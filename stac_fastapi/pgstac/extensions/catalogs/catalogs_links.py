@@ -83,6 +83,58 @@ class CatalogLinks(BaseLinks):
             for child_id in self.child_catalog_ids
         ]
 
+    def link_root(self) -> dict:
+        """Return the root catalog link.
+
+        Returns:
+            A link dict with rel='root' pointing to the global root.
+        """
+        return {
+            "rel": Relations.root.value,
+            "type": MimeTypes.json.value,
+            "href": self.base_url,
+            "title": "Root Catalog",
+        }
+
+    def link_data(self) -> dict:
+        """Return the data link to collections endpoint.
+
+        Returns:
+            A link dict with rel='data' pointing to the collections endpoint.
+        """
+        return {
+            "rel": "data",
+            "type": MimeTypes.json.value,
+            "href": self.resolve(f"catalogs/{self.catalog_id}/collections"),
+            "title": "Collections",
+        }
+
+    def link_catalogs(self) -> dict:
+        """Return the catalogs link to sub-catalogs endpoint.
+
+        Returns:
+            A link dict pointing to the sub-catalogs endpoint.
+        """
+        return {
+            "rel": "catalogs",
+            "type": MimeTypes.json.value,
+            "href": self.resolve(f"catalogs/{self.catalog_id}/catalogs"),
+            "title": "Sub-Catalogs",
+        }
+
+    def link_children(self) -> dict:
+        """Return the children link to children endpoint.
+
+        Returns:
+            A link dict pointing to the children endpoint.
+        """
+        return {
+            "rel": "children",
+            "type": MimeTypes.json.value,
+            "href": self.resolve(f"catalogs/{self.catalog_id}/children"),
+            "title": "All Children",
+        }
+
 
 @attr.s
 class CatalogSubcatalogsLinks(BaseLinks):

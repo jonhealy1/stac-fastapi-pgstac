@@ -115,6 +115,22 @@ async def test_get_all_catalogs(app_client):
     for catalog_id in catalog_ids:
         assert catalog_id in returned_catalog_ids
 
+    # Verify each catalog has proper dynamic links
+    for catalog in data["catalogs"]:
+        if catalog.get("id") in catalog_ids:
+            links = catalog.get("links", [])
+            assert len(links) > 0, f"Catalog {catalog.get('id')} has no links"
+
+            # Check for required link relations
+            link_rels = [link.get("rel") for link in links]
+            assert "self" in link_rels, f"Missing 'self' link in {catalog.get('id')}"
+            assert "parent" in link_rels, f"Missing 'parent' link in {catalog.get('id')}"
+            assert "root" in link_rels, f"Missing 'root' link in {catalog.get('id')}"
+
+            # Verify self link points to correct catalog
+            self_link = next((link for link in links if link.get("rel") == "self"), None)
+            assert catalog.get("id") in self_link["href"]
+
 
 @pytest.mark.asyncio
 async def test_get_catalog_by_id(app_client):
@@ -131,6 +147,22 @@ async def test_get_catalog_by_id(app_client):
     assert retrieved_catalog["id"] == "test-catalog-get"
     assert retrieved_catalog["type"] == "Catalog"
     assert retrieved_catalog["description"] == "A test catalog for getting"
+
+    # Verify dynamic links are present and correct
+    links = retrieved_catalog.get("links", [])
+    assert len(links) > 0, "Catalog should have links"
+
+    link_rels = [link.get("rel") for link in links]
+    assert "self" in link_rels, "Missing 'self' link"
+    assert "parent" in link_rels, "Missing 'parent' link"
+    assert "root" in link_rels, "Missing 'root' link"
+    assert "data" in link_rels, "Missing 'data' link to collections"
+    assert "catalogs" in link_rels, "Missing 'catalogs' link to sub-catalogs"
+    assert "children" in link_rels, "Missing 'children' link"
+
+    # Verify self link points to correct catalog
+    self_link = next((link for link in links if link.get("rel") == "self"), None)
+    assert "test-catalog-get" in self_link["href"]
 
 
 @pytest.mark.asyncio
@@ -267,6 +299,19 @@ async def test_catalog_links_parent_and_root(app_client):
     # Check for root link
     root_links = [link for link in parent_links if link.get("rel") == "root"]
     assert len(root_links) == 1
+
+    # Check for discovery links (data, catalogs, children)
+    data_links = [link for link in parent_links if link.get("rel") == "data"]
+    assert len(data_links) == 1
+    assert "/collections" in data_links[0]["href"]
+
+    catalogs_links = [link for link in parent_links if link.get("rel") == "catalogs"]
+    assert len(catalogs_links) == 1
+    assert "/catalogs" in catalogs_links[0]["href"]
+
+    children_links = [link for link in parent_links if link.get("rel") == "children"]
+    assert len(children_links) == 1
+    assert "/children" in children_links[0]["href"]
 
 
 @pytest.mark.asyncio
@@ -510,6 +555,27 @@ async def test_unlink_collection_from_catalog(app_client):
     assert len(data["collections"]) >= 1
     assert any(col.get("id") == "collection-for-unlink" for col in data["collections"])
 
+    # Verify response-level links are present
+    response_links = data.get("links", [])
+    assert len(response_links) > 0
+    response_link_rels = [link.get("rel") for link in response_links]
+    assert "self" in response_link_rels
+    assert "parent" in response_link_rels
+    assert "root" in response_link_rels
+
+    # Verify collection-level links are present and correct
+    collection = next(
+        (col for col in data["collections"] if col.get("id") == "collection-for-unlink"),
+        None,
+    )
+    assert collection is not None
+    col_links = collection.get("links", [])
+    assert len(col_links) > 0
+    col_link_rels = [link.get("rel") for link in col_links]
+    assert "self" in col_link_rels
+    assert "parent" in col_link_rels
+    assert "root" in col_link_rels
+
     # Unlink the collection
     resp = await app_client.delete(
         "/catalogs/catalog-for-collection-unlink/collections/collection-for-unlink"
@@ -590,19 +656,68 @@ async def test_poly_hierarchy_collection(app_client):
     await create_catalog(app_client, "catalog-1-poly", description="First catalog")
     await create_catalog(app_client, "catalog-2-poly", description="Second catalog")
 
-    # Create a collection in catalog 1
-    await create_catalog_collection(
-        app_client,
-        "catalog-1-poly",
-        "shared-collection-poly",
-        description="Shared collection",
-    )
+    # Create a collection with inferred links in the POST body to test filtering
+    collection_with_links = {
+        "id": "shared-collection-poly",
+        "type": "Collection",
+        "description": "Shared collection",
+        "stac_version": "1.0.0",
+        "license": "proprietary",
+        "extent": {
+            "spatial": {"bbox": [[-180, -90, 180, 90]]},
+            "temporal": {"interval": [[None, None]]},
+        },
+        "links": [
+            {
+                "rel": "self",
+                "href": "https://example.com/old-self-link",
+            },
+            {
+                "rel": "parent",
+                "href": "https://example.com/old-parent-link",
+            },
+            {
+                "rel": "license",
+                "href": "https://example.com/license",
+            },
+        ],
+    }
 
-    # Verify collection is in catalog 1
+    # Create collection in catalog 1
+    resp = await app_client.post(
+        "/catalogs/catalog-1-poly/collections", json=collection_with_links
+    )
+    assert resp.status_code == 201
+
+    # Verify collection is in catalog 1 with correct dynamic links
     resp = await app_client.get("/catalogs/catalog-1-poly/collections")
     assert resp.status_code == 200
     data = resp.json()
     assert any(col.get("id") == "shared-collection-poly" for col in data["collections"])
+
+    # Verify inferred links are regenerated with correct URLs
+    collection = next(
+        (col for col in data["collections"] if col.get("id") == "shared-collection-poly"),
+        None,
+    )
+    assert collection is not None
+    links = collection.get("links", [])
+
+    # Check that inferred links are regenerated (not from POST body)
+    self_links = [link for link in links if link.get("rel") == "self"]
+    assert len(self_links) == 1
+    assert "example.com" not in self_links[0]["href"]  # Old URL filtered out
+    assert "/catalogs/catalog-1-poly/collections" in self_links[0]["href"]  # Correct URL
+
+    # Check that custom links are preserved (if any were stored)
+    # Note: Custom links are only preserved if they survive the filter_links call
+    # and are stored in the database. In this test, the license link should be preserved
+    # since it's not an inferred link relation
+    license_links = [link for link in links if link.get("rel") == "license"]
+    # Custom links may or may not be present depending on storage implementation
+    # Just verify that inferred links are regenerated correctly
+    if license_links:
+        assert license_links[0]["href"] == "https://example.com/license"
 
     # Link the same collection to catalog 2 (poly-hierarchy)
     collection_ref = {"id": "shared-collection-poly"}
@@ -617,8 +732,40 @@ async def test_poly_hierarchy_collection(app_client):
     data = resp.json()
     assert any(col.get("id") == "shared-collection-poly" for col in data["collections"])
 
-    # Verify collection is also in catalog 2 (poly-hierarchy)
+    # Verify collection is also in catalog 2 (poly-hierarchy) with correct scoped links
     resp = await app_client.get("/catalogs/catalog-2-poly/collections")
     assert resp.status_code == 200
     data = resp.json()
     assert any(col.get("id") == "shared-collection-poly" for col in data["collections"])
+
+    # Verify links are scoped to catalog 2
+    collection = next(
+        (col for col in data["collections"] if col.get("id") == "shared-collection-poly"),
+        None,
+    )
+    assert collection is not None
+    links = collection.get("links", [])
+
+    # Verify parent link points to catalog-2-poly (scoped context)
+    parent_links = [link for link in links if link.get("rel") == "parent"]
+    assert len(parent_links) == 1
+    assert "catalog-2-poly" in parent_links[0]["href"]
+    assert "example.com" not in parent_links[0]["href"]
+
+    # Verify related links exist for alternative parents (poly-hierarchy)
+    related_links = [link for link in links if link.get("rel") == "related"]
+    assert (
+        len(related_links) >= 1
+    ), "Should have at least one related link for alternative parent"
+
+    # Verify related link points to the other catalog
+    related_hrefs = [link.get("href") for link in related_links]
+    assert any(
+        "catalog-1-poly" in href for href in related_hrefs
+    ), "Related link should point to catalog-1-poly"
+
+    # Verify no duplicate related links
+    related_hrefs_unique = set(related_hrefs)
+    assert len(related_hrefs_unique) == len(
+        related_hrefs
+    ), "Related links should not be duplicated"

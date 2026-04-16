@@ -14,6 +14,7 @@ from stac_fastapi.pgstac.extensions.catalogs.catalogs_links import (
     CatalogLinks,
     CatalogSubcatalogsLinks,
 )
+from stac_fastapi.pgstac.models.links import filter_links
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,33 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             limit=limit,
             request=request,
         )
+
+        # Generate links dynamically for each catalog
+        if request and catalogs_list:
+            for catalog in catalogs_list:
+                catalog_id = catalog.get("id")
+                parent_ids = catalog.get("parent_ids", [])
+
+                # Get child catalogs for link generation
+                child_catalogs, _, _ = await self.database.get_sub_catalogs(
+                    catalog_id=catalog_id,
+                    limit=1000,
+                    request=request,
+                )
+                child_catalog_ids = (
+                    [c.get("id") for c in child_catalogs] if child_catalogs else []
+                )
+
+                # Generate links
+                catalog["links"] = await CatalogLinks(
+                    catalog_id=catalog_id,
+                    request=request,
+                    parent_ids=parent_ids,
+                    child_catalog_ids=child_catalog_ids,
+                ).get_links(extra_links=catalog.get("links"))
+
+                # Remove internal metadata before returning
+                catalog.pop("parent_ids", None)
 
         return JSONResponse(
             content={
@@ -110,7 +138,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
 
     async def create_catalog(
         self, catalog: dict, request: Request | None = None, **kwargs
-    ) -> stac_types.Catalog:
+    ) -> JSONResponse:
         """Create a new catalog.
 
         Args:
@@ -119,7 +147,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             **kwargs: Additional keyword arguments.
 
         Returns:
-            The created catalog.
+            JSONResponse containing the created catalog with dynamically generated links.
         """
         # Convert Pydantic model to dict if needed
         catalog_dict = cast(
@@ -129,10 +157,41 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             else catalog,
         )
 
+        # Filter out inferred links before storing to avoid overwriting generated links
+        if "links" in catalog_dict:
+            catalog_dict["links"] = filter_links(catalog_dict["links"])
+
         await self.database.create_catalog(
             dict(catalog_dict), refresh=True, request=request
         )
-        return catalog_dict
+
+        # Generate links dynamically for response
+        if request:
+            catalog_id = catalog_dict.get("id")
+            parent_ids = catalog_dict.get("parent_ids", [])
+
+            # Get child catalogs for link generation
+            child_catalogs, _, _ = await self.database.get_sub_catalogs(
+                catalog_id=catalog_id,
+                limit=1000,
+                request=request,
+            )
+            child_catalog_ids = (
+                [c.get("id") for c in child_catalogs] if child_catalogs else []
+            )
+
+            # Generate links
+            catalog_dict["links"] = await CatalogLinks(
+                catalog_id=catalog_id,
+                request=request,
+                parent_ids=parent_ids,
+                child_catalog_ids=child_catalog_ids,
+            ).get_links(extra_links=catalog_dict.get("links"))
+
+        # Remove internal metadata before returning
+        catalog_dict.pop("parent_ids", None)
+
+        return JSONResponse(content=catalog_dict, status_code=201)
 
     async def update_catalog(
         self, catalog_id: str, catalog: dict, request: Request | None = None, **kwargs
@@ -204,10 +263,91 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             token=token,
             request=request,
         )
+
+        # Generate links dynamically for each collection in scoped context
+        if request and collections_list:
+            for collection in collections_list:
+                collection_id = collection.get("id")
+                parent_ids = collection.get("parent_ids", [])
+
+                # For scoped endpoint, generate links pointing to this specific catalog
+                collection["links"] = [
+                    {
+                        "rel": "self",
+                        "type": "application/json",
+                        "href": str(request.url),
+                    },
+                    {
+                        "rel": "parent",
+                        "type": "application/json",
+                        "href": str(request.base_url).rstrip("/")
+                        + f"/catalogs/{catalog_id}",
+                        "title": catalog_id,
+                    },
+                    {
+                        "rel": "root",
+                        "type": "application/json",
+                        "href": str(request.base_url).rstrip("/"),
+                    },
+                ]
+
+                # Add custom links from storage (non-inferred)
+                if collection.get("links"):
+                    custom_links = filter_links(collection.get("links", []))
+                    collection["links"].extend(custom_links)
+
+                # Add related links for alternative parents (poly-hierarchy)
+                if parent_ids and len(parent_ids) > 1:
+                    for parent_id in parent_ids:
+                        if parent_id != catalog_id:  # Don't link to self
+                            # Check if this related link already exists
+                            related_href = (
+                                str(request.base_url).rstrip("/")
+                                + f"/catalogs/{parent_id}/collections/{collection_id}"
+                            )
+                            if not any(
+                                link.get("href") == related_href
+                                for link in collection["links"]
+                                if link.get("rel") == "related"
+                            ):
+                                collection["links"].append(
+                                    {
+                                        "rel": "related",
+                                        "type": "application/json",
+                                        "href": related_href,
+                                        "title": f"Collection in {parent_id}",
+                                    }
+                                )
+
+                # Remove internal metadata
+                collection.pop("parent_ids", None)
+
+        # Generate response-level links
+        response_links = [
+            {
+                "rel": "self",
+                "type": "application/json",
+                "href": str(request.url) if request else "",
+            },
+            {
+                "rel": "parent",
+                "type": "application/json",
+                "href": str(request.base_url).rstrip("/") + f"/catalogs/{catalog_id}"
+                if request
+                else "",
+                "title": catalog_id,
+            },
+            {
+                "rel": "root",
+                "type": "application/json",
+                "href": str(request.base_url).rstrip("/") if request else "",
+            },
+        ]
+
         return JSONResponse(
             content={
                 "collections": collections_list or [],
-                "links": [],
+                "links": response_links,
                 "numberMatched": total_hits,
                 "numberReturned": len(collections_list) if collections_list else 0,
             }
@@ -361,6 +501,10 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             )
 
         coll_id = collection_dict.get("id")
+
+        # Filter out inferred links before storing to avoid overwriting generated links
+        if "links" in collection_dict:
+            collection_dict["links"] = filter_links(collection_dict["links"])
 
         try:
             # Try to find existing collection
