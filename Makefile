@@ -10,7 +10,7 @@ run = docker compose run --rm \
 				-e APP_PORT=${APP_PORT} \
 				app
 
-runtests = docker compose run --rm tests
+runtests = docker compose -f compose.tests.yml run --rm tests
 
 .PHONY: image
 image:
@@ -21,8 +21,8 @@ docker-run: image
 	docker compose up
 
 .PHONY: docker-run-nginx-proxy
-docker-run-nginx-proxy:
-	docker compose -f docker-compose.yml -f docker-compose.nginx.yml up
+docker-run-nginx-proxy: image
+	docker compose -f compose.yml -f compose.nginx.yml up
 
 .PHONY: docker-shell
 docker-shell:
