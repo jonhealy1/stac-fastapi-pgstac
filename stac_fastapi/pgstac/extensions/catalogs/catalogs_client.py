@@ -88,10 +88,32 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                 # Remove internal metadata before returning
                 catalog.pop("parent_ids", None)
 
+        # Generate pagination links
+        pagination_links = []
+        if request:
+            if next_token:
+                pagination_links.append(
+                    {
+                        "rel": "next",
+                        "type": "application/json",
+                        "href": str(request.url).split("?")[0]
+                        + f"?limit={limit}&token={next_token}",
+                    }
+                )
+            # Add self link
+            pagination_links.insert(
+                0,
+                {
+                    "rel": "self",
+                    "type": "application/json",
+                    "href": str(request.url),
+                },
+            )
+
         return JSONResponse(
             content={
                 "catalogs": catalogs_list or [],
-                "links": [],
+                "links": pagination_links,
                 "numberMatched": total_hits,
                 "numberReturned": len(catalogs_list) if catalogs_list else 0,
             }

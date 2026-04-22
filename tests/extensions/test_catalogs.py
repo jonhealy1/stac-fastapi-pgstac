@@ -133,6 +133,53 @@ async def test_get_all_catalogs(app_client):
 
 
 @pytest.mark.asyncio
+async def test_catalogs_pagination(app_client):
+    """Test pagination of catalogs endpoint."""
+    # Create 5 catalogs
+    catalog_ids = [
+        "pagination-test-1",
+        "pagination-test-2",
+        "pagination-test-3",
+        "pagination-test-4",
+        "pagination-test-5",
+    ]
+    for catalog_id in catalog_ids:
+        await create_catalog(app_client, catalog_id, description=f"Pagination test {catalog_id}")
+
+    # Get first page with limit=2
+    resp = await app_client.get("/catalogs?limit=2")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["catalogs"]) == 2
+    assert data["numberMatched"] >= 5
+    assert data["numberReturned"] == 2
+
+    # Verify pagination links
+    links = data.get("links", [])
+    link_rels = [link.get("rel") for link in links]
+    assert "self" in link_rels, "Missing 'self' link"
+    assert "next" in link_rels, "Missing 'next' link for pagination"
+
+    # Get the next link
+    next_link = next((link for link in links if link.get("rel") == "next"), None)
+    assert next_link is not None, "Next link should exist"
+    assert "token=offset:" in next_link["href"], "Next link should contain offset token"
+
+    # Follow the next link
+    next_url = next_link["href"].replace("http://localhost:8082", "")
+    resp_next = await app_client.get(next_url)
+    assert resp_next.status_code == 200
+    data_next = resp_next.json()
+    assert len(data_next["catalogs"]) == 2
+    assert data_next["numberMatched"] >= 5
+
+    # Verify the catalogs are different
+    first_page_ids = {cat.get("id") for cat in data["catalogs"]}
+    second_page_ids = {cat.get("id") for cat in data_next["catalogs"]}
+    assert len(first_page_ids & second_page_ids) == 0, "Pages should have different catalogs"
+
+
+@pytest.mark.asyncio
 async def test_get_catalog_by_id(app_client):
     """Test getting a specific catalog by ID."""
     # First create a catalog

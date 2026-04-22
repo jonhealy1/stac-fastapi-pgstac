@@ -37,14 +37,28 @@ class CatalogsDatabaseLogic:
             logger.debug("No request object provided to get_all_catalogs")
             return [], None, None
 
+        next_token = None
+        total_count = None
+
         try:
             async with request.app.state.get_connection(request, "r") as conn:
                 logger.debug("Attempting to fetch all catalogs from database")
                 # Use collection_search with CQL2 filter for type='Catalog'
+                # PgSTAC uses offset-based pagination for collections
+                offset = 0
+                if token:
+                    # token format is "offset:N" for offset-based pagination
+                    try:
+                        offset = int(token.split(":")[-1])
+                    except (ValueError, IndexError):
+                        offset = 0
+
                 search_query = {
                     "filter": {"op": "=", "args": [{"property": "type"}, "Catalog"]},
                     "limit": limit,
+                    "offset": offset,
                 }
+
                 q, p = render(
                     """
                     SELECT * FROM collection_search(:search::text::jsonb);
@@ -53,6 +67,15 @@ class CatalogsDatabaseLogic:
                 )
                 result = await conn.fetchval(q, *p)
                 catalogs = result.get("collections", []) if result else []
+                total_count = result.get("numberMatched") if result else None
+
+                # Calculate next offset for pagination
+                # If we got fewer results than requested, there's no next page
+                if catalogs and len(catalogs) >= limit:
+                    next_offset = offset + limit
+                    if next_offset < (total_count or 0):
+                        next_token = f"offset:{next_offset}"
+
                 logger.info(f"Successfully fetched {len(catalogs)} catalogs")
         except (AttributeError, KeyError, TypeError) as e:
             logger.warning(f"Error parsing catalog search results: {e}")
@@ -61,7 +84,7 @@ class CatalogsDatabaseLogic:
             logger.error(f"Unexpected error fetching all catalogs: {e}", exc_info=True)
             catalogs = []
 
-        return catalogs, len(catalogs) if catalogs else None, None
+        return catalogs, total_count, next_token
 
     async def find_catalog(self, catalog_id: str, request: Any = None) -> dict[str, Any]:
         """Find a catalog by ID.
