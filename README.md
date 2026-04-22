@@ -81,7 +81,12 @@ uv run pytest
 
 To run the tests in the test container:
 ```shell
-docker compose run --build --rm tests python -m pytest -s -vv
+docker compose -f compose.tests.yml run --build --rm tests python -m pytest -s -vv
+```
+
+Or using the Makefile:
+```shell
+make test
 ```
 
 ## Contributing
