@@ -76,9 +76,9 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         """
         # Check if offset is in query params (from pagination link)
         if request and not token:
-            offset = request.query_params.get("offset")
-            if offset:
-                token = offset
+            offset_param = request.query_params.get("offset")
+            if offset_param:
+                token = offset_param
 
         limit = limit or 10
         catalogs_list, total_hits, next_token = await self.database.get_all_catalogs(
@@ -123,7 +123,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
 
         # Generate pagination links - always generate from scratch based on offset
         # Don't rely on database's next_token as it may have empty body
-        offset = _parse_pagination_token(token)
+        offset: int = _parse_pagination_token(token)
 
         # Check if there are more results
         next_token_to_use = None
@@ -405,9 +405,12 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                 "body": {"offset": next_offset},
             }
 
-        response_links = await CollectionSearchPagingLinks(
-            request=request, next=next_token_to_use, prev=None
-        ).get_links()
+        if request is None:
+            response_links = []
+        else:
+            response_links = await CollectionSearchPagingLinks(
+                request=request, next=next_token_to_use, prev=None
+            ).get_links()
 
         # Remove title field from response links
         response_links = [
@@ -459,7 +462,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             request=request,
         )
 
-        offset = _parse_pagination_token(token)
+        offset: int = _parse_pagination_token(token)
         original_count = len(collections_list) if collections_list else 0
 
         if collections_list and len(collections_list) > limit:
@@ -542,7 +545,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             request=request,
         )
 
-        offset = _parse_pagination_token(token)
+        offset: int = _parse_pagination_token(token)
         original_count = len(catalogs_list) if catalogs_list else 0
 
         if catalogs_list and len(catalogs_list) > limit:
@@ -840,7 +843,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
 
         item_collection["links"] = links
 
-        return ItemCollection(**item_collection)
+        return cast(ItemCollection, ItemCollection(**item_collection))
 
     async def get_catalog_collection_item(
         self,
@@ -892,9 +895,9 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         """
         # Check if offset is in query params (from pagination link)
         if request and not token:
-            offset = request.query_params.get("offset")
-            if offset:
-                token = offset
+            offset_param = request.query_params.get("offset")
+            if offset_param:
+                token = offset_param
 
         logger.info(f"get_catalog_children called with limit={limit}, token={token}")
         limit = limit or 10
@@ -930,7 +933,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         # Don't rely on database's next_token as it may have empty body
         links = []
         if request:
-            offset = _parse_pagination_token(token)
+            offset: int = _parse_pagination_token(token)
 
             # Check if there are more results
             next_token_to_use = None
