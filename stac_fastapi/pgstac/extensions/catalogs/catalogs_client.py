@@ -14,7 +14,7 @@ from stac_fastapi.pgstac.extensions.catalogs.catalogs_links import (
     CatalogLinks,
     CatalogSubcatalogsLinks,
 )
-from stac_fastapi.pgstac.models.links import filter_links
+from stac_fastapi.pgstac.models.links import CollectionSearchPagingLinks, filter_links
 
 logger = logging.getLogger(__name__)
 
@@ -88,27 +88,10 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                 # Remove internal metadata before returning
                 catalog.pop("parent_ids", None)
 
-        # Generate pagination links
-        pagination_links = []
-        if request:
-            if next_token:
-                pagination_links.append(
-                    {
-                        "rel": "next",
-                        "type": "application/json",
-                        "href": str(request.url).split("?")[0]
-                        + f"?limit={limit}&token={next_token}",
-                    }
-                )
-            # Add self link
-            pagination_links.insert(
-                0,
-                {
-                    "rel": "self",
-                    "type": "application/json",
-                    "href": str(request.url),
-                },
-            )
+        # Generate pagination links using CollectionSearchPagingLinks pattern
+        pagination_links = await CollectionSearchPagingLinks(
+            request=request, next=next_token, prev=None
+        ).get_links()
 
         return JSONResponse(
             content={
@@ -363,27 +346,10 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                 # Remove internal metadata
                 collection.pop("parent_ids", None)
 
-        # Generate response-level links
-        response_links = [
-            {
-                "rel": "self",
-                "type": "application/json",
-                "href": str(request.url) if request else "",
-            },
-            {
-                "rel": "parent",
-                "type": "application/json",
-                "href": str(request.base_url).rstrip("/") + f"/catalogs/{catalog_id}"
-                if request
-                else "",
-                "title": catalog_id,
-            },
-            {
-                "rel": "root",
-                "type": "application/json",
-                "href": str(request.base_url).rstrip("/") if request else "",
-            },
-        ]
+        # Generate response-level links using CollectionSearchPagingLinks pattern
+        response_links = await CollectionSearchPagingLinks(
+            request=request, next=next_token, prev=None
+        ).get_links()
 
         return JSONResponse(
             content={

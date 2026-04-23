@@ -1,6 +1,7 @@
 import json
 import logging
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 from buildpg import render
 from stac_fastapi.types.errors import NotFoundError
@@ -8,6 +9,85 @@ from stac_fastapi.types.errors import NotFoundError
 from stac_fastapi.pgstac.db import dbfunc
 
 logger = logging.getLogger(__name__)
+
+
+def _convert_pgstac_link_to_paging_link(link: dict[str, Any]) -> dict[str, Any]:
+    """Convert PgSTAC link format to CollectionSearchPagingLinks format.
+
+    PgSTAC returns links with href containing query parameters.
+    CollectionSearchPagingLinks expects links with a body dict containing the parameters.
+
+    Args:
+        link: Link dict from PgSTAC with 'href' field
+
+    Returns:
+        Link dict with 'body' field containing parsed query parameters
+    """
+    href = link.get("href", "")
+    parsed = urlparse(href)
+    params = parse_qs(parsed.query)
+
+    # parse_qs returns lists for values, convert to single values
+    body = {
+        k: v[0] if isinstance(v, list) and len(v) == 1 else v for k, v in params.items()
+    }
+
+    return {
+        "rel": link.get("rel"),
+        "type": link.get("type"),
+        "body": body,
+    }
+
+
+def _parse_pagination_token(token: str | None) -> int:
+    """Parse pagination token to offset value.
+
+    Args:
+        token: Pagination token (plain integer or None)
+
+    Returns:
+        Offset value (0 if token is invalid)
+    """
+    if token:
+        try:
+            return int(token)
+        except (ValueError, TypeError):
+            return 0
+    return 0
+
+
+async def _execute_collection_search(
+    conn: Any,
+    search_query: dict[str, Any],
+) -> tuple[list[dict[str, Any]], int | None, dict[str, Any] | None]:
+    """Execute collection_search query and extract results and pagination.
+
+    Args:
+        conn: Database connection
+        search_query: Search query dict with filter, limit, offset
+
+    Returns:
+        Tuple of (items list, total count, next link dict if any)
+    """
+    q, p = render(
+        """
+        SELECT * FROM collection_search(:search::text::jsonb);
+        """,
+        search=json.dumps(search_query),
+    )
+    result = await conn.fetchval(q, *p)
+    items = result.get("collections", []) if result else []
+    total_count = result.get("numberMatched") if result else None
+
+    # Extract next link from result (PgSTAC returns pagination links)
+    next_link = None
+    if links := result.get("links"):
+        for link in links:
+            if link.get("rel") == "next":
+                next_link = _convert_pgstac_link_to_paging_link(link)
+                break
+
+    return items, total_count, next_link
 
 
 class CatalogsDatabaseLogic:
@@ -19,7 +99,7 @@ class CatalogsDatabaseLogic:
         limit: int,
         request: Any = None,
         sort: list[dict[str, Any]] | None = None,
-    ) -> tuple[list[dict[str, Any]], int | None, str | None]:
+    ) -> tuple[list[dict[str, Any]], int | None, dict[str, Any] | None]:
         """Retrieve all catalogs with pagination.
 
         Uses collection_search() pgSTAC function with CQL2 filters for API stability.
@@ -31,13 +111,13 @@ class CatalogsDatabaseLogic:
             sort: Optional sort parameter.
 
         Returns:
-            A tuple of (catalogs list, total count, next pagination token if any).
+            A tuple of (catalogs list, total count, next link dict if any).
         """
         if request is None:
             logger.debug("No request object provided to get_all_catalogs")
             return [], None, None
 
-        next_token = None
+        next_link = None
         total_count = None
 
         try:
@@ -45,13 +125,7 @@ class CatalogsDatabaseLogic:
                 logger.debug("Attempting to fetch all catalogs from database")
                 # Use collection_search with CQL2 filter for type='Catalog'
                 # PgSTAC uses offset-based pagination for collections
-                offset = 0
-                if token:
-                    # token format is "offset:N" for offset-based pagination
-                    try:
-                        offset = int(token.split(":")[-1])
-                    except (ValueError, IndexError):
-                        offset = 0
+                offset = _parse_pagination_token(token)
 
                 search_query = {
                     "filter": {"op": "=", "args": [{"property": "type"}, "Catalog"]},
@@ -59,23 +133,9 @@ class CatalogsDatabaseLogic:
                     "offset": offset,
                 }
 
-                q, p = render(
-                    """
-                    SELECT * FROM collection_search(:search::text::jsonb);
-                    """,
-                    search=json.dumps(search_query),
+                catalogs, total_count, next_link = await _execute_collection_search(
+                    conn, search_query
                 )
-                result = await conn.fetchval(q, *p)
-                catalogs = result.get("collections", []) if result else []
-                total_count = result.get("numberMatched") if result else None
-
-                # Calculate next offset for pagination
-                # If we got fewer results than requested, there's no next page
-                if catalogs and len(catalogs) >= limit:
-                    next_offset = offset + limit
-                    if next_offset < (total_count or 0):
-                        next_token = f"offset:{next_offset}"
-
                 logger.info(f"Successfully fetched {len(catalogs)} catalogs")
         except (AttributeError, KeyError, TypeError) as e:
             logger.warning(f"Error parsing catalog search results: {e}")
@@ -84,7 +144,7 @@ class CatalogsDatabaseLogic:
             logger.error(f"Unexpected error fetching all catalogs: {e}", exc_info=True)
             catalogs = []
 
-        return catalogs, total_count, next_token
+        return catalogs, total_count, next_link
 
     async def find_catalog(self, catalog_id: str, request: Any = None) -> dict[str, Any]:
         """Find a catalog by ID.
@@ -243,7 +303,7 @@ class CatalogsDatabaseLogic:
         limit: int = 10,
         token: str | None = None,
         request: Any = None,
-    ) -> tuple[list[dict[str, Any]], int | None, str | None]:
+    ) -> tuple[list[dict[str, Any]], int | None, dict[str, Any] | None]:
         """Get all children (catalogs and collections) of a catalog.
 
         Uses collection_search() pgSTAC function with CQL2 filters for API stability.
@@ -255,7 +315,7 @@ class CatalogsDatabaseLogic:
             request: The FastAPI request object.
 
         Returns:
-            A tuple of (children list, total count, next token).
+            A tuple of (children list, total count, next link dict if any).
         """
         if request is None:
             return [], None, None
@@ -266,25 +326,28 @@ class CatalogsDatabaseLogic:
         except NotFoundError:
             raise
 
+        next_link = None
+        total_count = None
+
         try:
             async with request.app.state.get_connection(request, "r") as conn:
                 # Use collection_search with CQL2 filter for parent_ids contains catalog_id
                 # No type filter needed - returns both Catalogs and Collections
+                # PgSTAC uses offset-based pagination for collections
+                offset = _parse_pagination_token(token)
+
                 search_query = {
                     "filter": {
                         "op": "a_contains",
                         "args": [{"property": "parent_ids"}, catalog_id],
                     },
                     "limit": limit,
+                    "offset": offset,
                 }
-                q, p = render(
-                    """
-                    SELECT * FROM collection_search(:search::text::jsonb);
-                    """,
-                    search=json.dumps(search_query),
+
+                children, total_count, next_link = await _execute_collection_search(
+                    conn, search_query
                 )
-                result = await conn.fetchval(q, *p)
-                children = result.get("collections", []) if result else []
         except (AttributeError, KeyError, TypeError) as e:
             logger.warning(f"Error parsing catalog children results: {e}")
             children = []
@@ -294,7 +357,7 @@ class CatalogsDatabaseLogic:
             )
             children = []
 
-        return children, len(children) if children else None, None
+        return children, total_count, next_link
 
     async def get_catalog_collections(
         self,
@@ -302,7 +365,7 @@ class CatalogsDatabaseLogic:
         limit: int = 10,
         token: str | None = None,
         request: Any = None,
-    ) -> tuple[list[dict[str, Any]], int | None, str | None]:
+    ) -> tuple[list[dict[str, Any]], int | None, dict[str, Any] | None]:
         """Get collections linked to a catalog.
 
         Uses collection_search() pgSTAC function with CQL2 filters for API stability.
@@ -314,7 +377,7 @@ class CatalogsDatabaseLogic:
             request: The FastAPI request object.
 
         Returns:
-            A tuple of (collections list, total count, next token).
+            A tuple of (collections list, total count, next link dict if any).
         """
         if request is None:
             return [], None, None
@@ -325,10 +388,16 @@ class CatalogsDatabaseLogic:
         except NotFoundError:
             raise
 
+        next_link = None
+        total_count = None
+
         try:
             async with request.app.state.get_connection(request, "r") as conn:
                 # Use collection_search with CQL2 filter for type='Collection' and parent_ids contains catalog_id
                 # Using 'a_contains' (Array Contains) operator to check if catalog_id is in the parent_ids array
+                # PgSTAC uses offset-based pagination for collections
+                offset = _parse_pagination_token(token)
+
                 search_query = {
                     "filter": {
                         "op": "and",
@@ -341,15 +410,12 @@ class CatalogsDatabaseLogic:
                         ],
                     },
                     "limit": limit,
+                    "offset": offset,
                 }
-                q, p = render(
-                    """
-                    SELECT * FROM collection_search(:search::text::jsonb);
-                    """,
-                    search=json.dumps(search_query),
+
+                collections, total_count, next_link = await _execute_collection_search(
+                    conn, search_query
                 )
-                result = await conn.fetchval(q, *p)
-                collections = result.get("collections", []) if result else []
         except (AttributeError, KeyError, TypeError) as e:
             logger.warning(f"Error parsing catalog collections results: {e}")
             collections = []
@@ -359,7 +425,7 @@ class CatalogsDatabaseLogic:
             )
             collections = []
 
-        return collections, len(collections) if collections else None, None
+        return collections, total_count, next_link
 
     async def get_sub_catalogs(
         self,
@@ -367,7 +433,7 @@ class CatalogsDatabaseLogic:
         limit: int = 10,
         token: str | None = None,
         request: Any = None,
-    ) -> tuple[list[dict[str, Any]], int | None, str | None]:
+    ) -> tuple[list[dict[str, Any]], int | None, dict[str, Any] | None]:
         """Get sub-catalogs of a catalog.
 
         Uses collection_search() pgSTAC function with CQL2 filters for API stability.
@@ -379,7 +445,7 @@ class CatalogsDatabaseLogic:
             request: The FastAPI request object.
 
         Returns:
-            A tuple of (catalogs list, total count, next token).
+            A tuple of (catalogs list, total count, next link dict if any).
         """
         if request is None:
             return [], None, None
@@ -390,11 +456,17 @@ class CatalogsDatabaseLogic:
         except NotFoundError:
             raise
 
+        next_link = None
+        total_count = None
+
         try:
             async with request.app.state.get_connection(request, "r") as conn:
                 logger.debug(f"Fetching sub-catalogs for parent: {catalog_id}")
                 # Use collection_search with CQL2 filter for type='Catalog' and parent_ids contains catalog_id
                 # Using 'a_contains' (Array Contains) operator to check if catalog_id is in the parent_ids array
+                # PgSTAC uses offset-based pagination for collections
+                offset = _parse_pagination_token(token)
+
                 search_query = {
                     "filter": {
                         "op": "and",
@@ -407,16 +479,12 @@ class CatalogsDatabaseLogic:
                         ],
                     },
                     "limit": limit,
+                    "offset": offset,
                 }
-                q, p = render(
-                    """
-                    SELECT * FROM collection_search(:search::text::jsonb);
-                    """,
-                    search=json.dumps(search_query),
+
+                catalogs, total_count, next_link = await _execute_collection_search(
+                    conn, search_query
                 )
-                logger.debug(f"Query: {q}, Params: {p}")
-                result = await conn.fetchval(q, *p)
-                catalogs = result.get("collections", []) if result else []
                 logger.debug(f"Found {len(catalogs)} sub-catalogs")
         except (AttributeError, KeyError, TypeError) as e:
             logger.warning(f"Error parsing sub-catalogs results: {e}")
@@ -425,7 +493,7 @@ class CatalogsDatabaseLogic:
             logger.error(f"Unexpected error fetching sub-catalogs: {e}", exc_info=True)
             catalogs = []
 
-        return catalogs, len(catalogs) if catalogs else None, None
+        return catalogs, total_count, next_link
 
     async def find_collection(
         self, collection_id: str, request: Any = None
@@ -567,6 +635,8 @@ class CatalogsDatabaseLogic:
     ) -> tuple[list[dict[str, Any]], int | None, str | None]:
         """Get items from a collection in a catalog.
 
+        Uses the search function with collection filter to retrieve items.
+
         Args:
             catalog_id: The catalog ID.
             collection_id: The collection ID.
@@ -583,16 +653,33 @@ class CatalogsDatabaseLogic:
         if request is None:
             return [], None, None
 
+        # Build search request to get items from collection
+        search_query = {
+            "collections": [collection_id],
+            "limit": limit,
+        }
+
+        if bbox:
+            search_query["bbox"] = bbox
+        if datetime:
+            search_query["datetime"] = datetime
+        if token:
+            search_query["token"] = token
+
         async with request.app.state.get_connection(request, "r") as conn:
             q, p = render(
                 """
-                SELECT * FROM get_collection_items(:collection_id::text);
+                SELECT * FROM search(:search::text::jsonb);
                 """,
-                collection_id=collection_id,
+                search=json.dumps(search_query),
             )
-            items = await conn.fetchval(q, *p) or []
+            result = await conn.fetchval(q, *p) or {}
 
-        return items[:limit], len(items), None
+        items = result.get("features", [])
+        total_count = result.get("numberMatched")
+        next_token = result.get("next")
+
+        return items, total_count, next_token
 
     async def get_catalog_collection_item(
         self,

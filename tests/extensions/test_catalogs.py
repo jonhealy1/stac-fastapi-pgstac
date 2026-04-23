@@ -144,7 +144,9 @@ async def test_catalogs_pagination(app_client):
         "pagination-test-5",
     ]
     for catalog_id in catalog_ids:
-        await create_catalog(app_client, catalog_id, description=f"Pagination test {catalog_id}")
+        await create_catalog(
+            app_client, catalog_id, description=f"Pagination test {catalog_id}"
+        )
 
     # Get first page with limit=2
     resp = await app_client.get("/catalogs?limit=2")
@@ -176,7 +178,175 @@ async def test_catalogs_pagination(app_client):
     # Verify the catalogs are different
     first_page_ids = {cat.get("id") for cat in data["catalogs"]}
     second_page_ids = {cat.get("id") for cat in data_next["catalogs"]}
-    assert len(first_page_ids & second_page_ids) == 0, "Pages should have different catalogs"
+    assert (
+        len(first_page_ids & second_page_ids) == 0
+    ), "Pages should have different catalogs"
+
+
+@pytest.mark.asyncio
+async def test_sub_catalogs_pagination(app_client):
+    """Test pagination of sub-catalogs endpoint."""
+    # Create parent catalog
+    parent_id = "parent-for-sub-pagination"
+    await create_catalog(
+        app_client, parent_id, description="Parent for sub-catalog pagination"
+    )
+
+    # Create 5 sub-catalogs
+    for i in range(1, 6):
+        sub_id = f"{parent_id}-sub-{i}"
+        await create_sub_catalog(
+            app_client, parent_id, sub_id, description=f"Sub-catalog {i}"
+        )
+
+    # Get first page with limit=2
+    resp = await app_client.get(f"/catalogs/{parent_id}/catalogs?limit=2")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["catalogs"]) == 2
+    assert data["numberMatched"] >= 5
+    assert data["numberReturned"] == 2
+
+    # Verify pagination links
+    links = data.get("links", [])
+    link_rels = [link.get("rel") for link in links]
+    assert "self" in link_rels, "Missing 'self' link"
+    assert "next" in link_rels, "Missing 'next' link for pagination"
+
+    # Get the next link
+    next_link = next((link for link in links if link.get("rel") == "next"), None)
+    assert next_link is not None, "Next link should exist"
+    assert "offset=" in next_link["href"], "Next link should contain offset parameter"
+
+    # Follow the next link
+    next_url = next_link["href"].replace("http://localhost:8082", "")
+    resp_next = await app_client.get(next_url)
+    assert resp_next.status_code == 200
+    data_next = resp_next.json()
+    assert len(data_next["catalogs"]) == 2
+    assert data_next["numberMatched"] >= 5
+
+    # Verify the catalogs are different
+    first_page_ids = {cat.get("id") for cat in data["catalogs"]}
+    second_page_ids = {cat.get("id") for cat in data_next["catalogs"]}
+    assert (
+        len(first_page_ids & second_page_ids) == 0
+    ), "Pages should have different catalogs"
+
+
+@pytest.mark.asyncio
+async def test_catalog_collections_pagination(app_client):
+    """Test pagination of catalog collections endpoint."""
+    # Create parent catalog
+    catalog_id = "catalog-for-collections-pagination"
+    await create_catalog(
+        app_client, catalog_id, description="Catalog for collections pagination"
+    )
+
+    # Create 5 collections
+    for i in range(1, 6):
+        collection_id = f"collection-pagination-{i}"
+        await create_collection(
+            app_client,
+            catalog_id,
+            collection_id,
+            description=f"Collection {i}",
+        )
+
+    # Get first page with limit=2
+    resp = await app_client.get(f"/catalogs/{catalog_id}/collections?limit=2")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["collections"]) == 2
+    assert data["numberMatched"] >= 5
+    assert data["numberReturned"] == 2
+
+    # Verify pagination links
+    links = data.get("links", [])
+    link_rels = [link.get("rel") for link in links]
+    assert "self" in link_rels, "Missing 'self' link"
+    assert "next" in link_rels, "Missing 'next' link for pagination"
+
+    # Get the next link
+    next_link = next((link for link in links if link.get("rel") == "next"), None)
+    assert next_link is not None, "Next link should exist"
+    assert "offset=" in next_link["href"], "Next link should contain offset parameter"
+
+    # Follow the next link
+    next_url = next_link["href"].replace("http://localhost:8082", "")
+    resp_next = await app_client.get(next_url)
+    assert resp_next.status_code == 200
+    data_next = resp_next.json()
+    assert len(data_next["collections"]) == 2
+    assert data_next["numberMatched"] >= 5
+
+    # Verify the collections are different
+    first_page_ids = {col.get("id") for col in data["collections"]}
+    second_page_ids = {col.get("id") for col in data_next["collections"]}
+    assert (
+        len(first_page_ids & second_page_ids) == 0
+    ), "Pages should have different collections"
+
+
+@pytest.mark.asyncio
+async def test_catalog_children_pagination(app_client):
+    """Test pagination of catalog children endpoint."""
+    # Create parent catalog
+    parent_id = "parent-for-children-pagination"
+    await create_catalog(
+        app_client, parent_id, description="Parent for children pagination"
+    )
+
+    # Create 3 sub-catalogs
+    for i in range(1, 4):
+        sub_id = f"{parent_id}-sub-{i}"
+        await create_sub_catalog(
+            app_client, parent_id, sub_id, description=f"Sub-catalog {i}"
+        )
+
+    # Create 3 collections
+    for i in range(1, 4):
+        collection_id = f"collection-children-{i}"
+        await create_collection(
+            app_client,
+            parent_id,
+            collection_id,
+            description=f"Collection {i}",
+        )
+
+    # Get first page with limit=3 (should get 3 items - mix of catalogs and collections)
+    resp = await app_client.get(f"/catalogs/{parent_id}/children?limit=3")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["children"]) == 3
+    assert data["numberMatched"] >= 6
+    assert data["numberReturned"] == 3
+
+    # Verify pagination links
+    links = data.get("links", [])
+    link_rels = [link.get("rel") for link in links]
+    assert "self" in link_rels, "Missing 'self' link"
+    assert "next" in link_rels, "Missing 'next' link for pagination"
+
+    # Get the next link
+    next_link = next((link for link in links if link.get("rel") == "next"), None)
+    assert next_link is not None, "Next link should exist"
+    assert "offset=" in next_link["href"], "Next link should contain offset parameter"
+
+    # Follow the next link
+    next_url = next_link["href"].replace("http://localhost:8082", "")
+    resp_next = await app_client.get(next_url)
+    assert resp_next.status_code == 200
+    data_next = resp_next.json()
+    assert len(data_next["children"]) == 3
+    assert data_next["numberMatched"] >= 6
+
+    # Verify the children are different
+    first_page_ids = {child.get("id") for child in data["children"]}
+    second_page_ids = {child.get("id") for child in data_next["children"]}
+    assert (
+        len(first_page_ids & second_page_ids) == 0
+    ), "Pages should have different children"
 
 
 @pytest.mark.asyncio
@@ -816,3 +986,48 @@ async def test_poly_hierarchy_collection(app_client):
     assert len(related_hrefs_unique) == len(
         related_hrefs
     ), "Related links should not be duplicated"
+
+
+@pytest.mark.asyncio
+async def test_get_catalog_collection_items(app_client, api_version):
+    """Test getting items from a collection in a catalog."""
+    # Create catalog
+    catalog_id = "catalog-for-items"
+    await create_catalog(app_client, catalog_id, description="Catalog for items test")
+
+    # Create collection
+    collection_id = "collection-for-items"
+    await create_collection(app_client, collection_id, description="Collection for items")
+
+    # Link collection to catalog
+    resp = await app_client.post(
+        f"/catalogs/{catalog_id}/collections",
+        json={
+            "id": collection_id,
+            "type": "Collection",
+            "description": "Collection for items",
+            "stac_version": "1.0.0",
+            "license": "proprietary",
+            "extent": {
+                "spatial": {"bbox": [[-180, -90, 180, 90]]},
+                "temporal": {"interval": [[None, None]]},
+            },
+            "links": [],
+        },
+    )
+    assert resp.status_code in [200, 201]
+
+    # Get items from collection in catalog
+    resp = await app_client.get(
+        f"/catalogs/{catalog_id}/collections/{collection_id}/items"
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+
+    # Verify response structure
+    assert "features" in data
+    assert "links" in data
+    assert "numberMatched" in data
+    assert "numberReturned" in data
+    assert isinstance(data["features"], list)
+    assert isinstance(data["links"], list)
