@@ -889,12 +889,11 @@ async def test_cycle_prevention(app_client):
     )
 
     # Try to link A as a child of B (would create a cycle)
-    # Note: Cycle prevention is implemented but may not be fully enforced in all cases
     catalog_a_ref = {"id": "catalog-a-cycle"}
     resp = await app_client.post("/catalogs/catalog-b-cycle/catalogs", json=catalog_a_ref)
-    # Cycle prevention should prevent this, but implementation may vary
-    # For now, just verify the request completes
-    assert resp.status_code in [200, 201, 400, 422, 500]
+    # Cycle prevention should prevent this with a 400 Bad Request
+    assert resp.status_code == 400
+    assert "cycle" in resp.json()["detail"].lower()
 
 
 @pytest.mark.asyncio

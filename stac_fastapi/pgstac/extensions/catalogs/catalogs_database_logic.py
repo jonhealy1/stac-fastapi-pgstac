@@ -622,37 +622,6 @@ class CatalogsDatabaseLogic:
 
         return collection
 
-    async def get_catalog_collection_items(
-        self,
-        catalog_id: str,
-        collection_id: str,
-        bbox: Any = None,
-        datetime: str | None = None,
-        limit: int = 10,
-        token: str | None = None,
-        request: Any = None,
-        **kwargs: Any,
-    ) -> tuple[list[dict[str, Any]], int | None, str | None]:
-        """Get items from a collection in a catalog.
-
-        Note: This method is deprecated. The client method now handles
-        the search directly following core.py's pattern.
-
-        Args:
-            catalog_id: The catalog ID.
-            collection_id: The collection ID.
-            bbox: Bounding box filter.
-            datetime: Datetime filter.
-            limit: The number of results to return.
-            token: The pagination token.
-            request: The FastAPI request object.
-            **kwargs: Additional arguments.
-
-        Returns:
-            A tuple of (items list, total count, next token).
-        """
-        return [], None, None
-
     async def get_catalog_collection_item(
         self,
         catalog_id: str,

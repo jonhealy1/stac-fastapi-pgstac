@@ -6,6 +6,7 @@ from typing import Any, cast
 
 import attr
 from buildpg import render
+from fastapi import HTTPException
 from stac_fastapi.types import stac as stac_types
 from stac_fastapi.types.errors import NotFoundError
 from stac_fastapi.types.stac import ItemCollection
@@ -581,7 +582,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             JSONResponse containing the created or linked catalog.
 
         Raises:
-            ValueError: If linking would create a cycle.
+            HTTPException: 400 Bad Request if linking would create a cycle.
         """
         # Convert Pydantic model to dict if needed
         if hasattr(catalog, "model_dump"):
@@ -597,8 +598,9 @@ class CatalogsClient(AsyncBaseCatalogsClient):
 
             # Check for cycles before linking
             if await self.database._check_cycle(cat_id, catalog_id, request=request):
-                raise ValueError(
-                    f"Cannot link catalog {cat_id} as child of {catalog_id}: would create a cycle"
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot link catalog {cat_id} as child of {catalog_id}: would create a cycle",
                 )
 
             # Link existing catalog - add parent_id if not already present
@@ -610,7 +612,10 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             existing["parent_ids"] = parent_ids
             await self.database.create_catalog(existing, refresh=True, request=request)
             return JSONResponse(content=existing, status_code=201)
-        except Exception:
+        except HTTPException:
+            # Re-raise HTTP exceptions (like cycle detection errors)
+            raise
+        except NotFoundError:
             # Create new catalog
             catalog_dict["type"] = "Catalog"
             catalog_dict["parent_ids"] = [catalog_id]
@@ -668,7 +673,10 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                 coll_id, existing, refresh=True, request=request
             )
             return JSONResponse(content=existing, status_code=200)
-        except Exception:
+        except HTTPException:
+            # Re-raise HTTP exceptions
+            raise
+        except NotFoundError:
             # Create new collection
             collection_dict["type"] = "Collection"
             collection_dict["parent_ids"] = [catalog_id]
