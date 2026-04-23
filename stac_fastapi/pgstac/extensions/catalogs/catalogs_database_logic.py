@@ -635,7 +635,8 @@ class CatalogsDatabaseLogic:
     ) -> tuple[list[dict[str, Any]], int | None, str | None]:
         """Get items from a collection in a catalog.
 
-        Uses the search function with collection filter to retrieve items.
+        Note: This method is deprecated. The client method now handles
+        the search directly following core.py's pattern.
 
         Args:
             catalog_id: The catalog ID.
@@ -650,36 +651,7 @@ class CatalogsDatabaseLogic:
         Returns:
             A tuple of (items list, total count, next token).
         """
-        if request is None:
-            return [], None, None
-
-        # Build search request to get items from collection
-        search_query = {
-            "collections": [collection_id],
-            "limit": limit,
-        }
-
-        if bbox:
-            search_query["bbox"] = bbox
-        if datetime:
-            search_query["datetime"] = datetime
-        if token:
-            search_query["token"] = token
-
-        async with request.app.state.get_connection(request, "r") as conn:
-            q, p = render(
-                """
-                SELECT * FROM search(:search::text::jsonb);
-                """,
-                search=json.dumps(search_query),
-            )
-            result = await conn.fetchval(q, *p) or {}
-
-        items = result.get("features", [])
-        total_count = result.get("numberMatched")
-        next_token = result.get("next")
-
-        return items, total_count, next_token
+        return [], None, None
 
     async def get_catalog_collection_item(
         self,

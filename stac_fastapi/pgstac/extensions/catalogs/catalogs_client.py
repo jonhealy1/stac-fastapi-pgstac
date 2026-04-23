@@ -1,20 +1,33 @@
 """Catalogs client implementation for pgstac."""
 
+import json
 import logging
 from typing import Any, cast
 
 import attr
+from buildpg import render
 from fastapi import Request
 from stac_fastapi.types import stac as stac_types
 from stac_fastapi.types.errors import NotFoundError
+from stac_fastapi.types.stac import ItemCollection
 from stac_fastapi_catalogs_extension.client import AsyncBaseCatalogsClient
+from stac_fastapi_catalogs_extension.types import Catalogs, Children
+from stac_pydantic.api.collections import Collections
 from starlette.responses import JSONResponse
 
+from stac_fastapi.pgstac.extensions.catalogs.catalogs_database_logic import (
+    _parse_pagination_token,
+)
 from stac_fastapi.pgstac.extensions.catalogs.catalogs_links import (
     CatalogLinks,
     CatalogSubcatalogsLinks,
+    SubCatalogLinks,
 )
-from stac_fastapi.pgstac.models.links import CollectionSearchPagingLinks, filter_links
+from stac_fastapi.pgstac.models.links import (
+    CollectionSearchPagingLinks,
+    ItemCollectionLinks,
+    filter_links,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +48,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         token: str | None = None,
         request: Request | None = None,
         **kwargs,
-    ) -> JSONResponse:
+    ) -> Catalogs:
         """Get all catalogs with pagination.
 
         Args:
@@ -45,14 +58,23 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             **kwargs: Additional keyword arguments.
 
         Returns:
-            JSONResponse containing catalogs list, total count, and pagination info.
+            Catalogs object containing catalogs list, total count, and pagination info.
         """
+        # Check if offset is in query params (from pagination link)
+        if request and not token:
+            offset = request.query_params.get("offset")
+            if offset:
+                token = offset
+                print(f"DEBUG: Using offset from query params: token={token}")
+
+        print(f"DEBUG: get_catalogs called with limit={limit}, token={token}")
         limit = limit or 10
         catalogs_list, total_hits, next_token = await self.database.get_all_catalogs(
             token=token,
             limit=limit,
             request=request,
         )
+        print(f"DEBUG: got {len(catalogs_list)} catalogs, total_hits={total_hits}")
 
         # Generate links dynamically for each catalog
         if request and catalogs_list:
@@ -88,18 +110,30 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                 # Remove internal metadata before returning
                 catalog.pop("parent_ids", None)
 
-        # Generate pagination links using CollectionSearchPagingLinks pattern
+        # Generate pagination links - always generate from scratch based on offset
+        # Don't rely on database's next_token as it may have empty body
+        offset = _parse_pagination_token(token)
+
+        # Check if there are more results
+        next_token_to_use = None
+        if total_hits and offset + len(catalogs_list) < total_hits:
+            # There are more results, generate next link
+            next_offset = offset + len(catalogs_list)
+            next_token_to_use = {
+                "rel": "next",
+                "type": "application/json",
+                "body": {"offset": next_offset},
+            }
+
         pagination_links = await CollectionSearchPagingLinks(
-            request=request, next=next_token, prev=None
+            request=request, next=next_token_to_use, prev=None
         ).get_links()
 
-        return JSONResponse(
-            content={
-                "catalogs": catalogs_list or [],
-                "links": pagination_links,
-                "numberMatched": total_hits,
-                "numberReturned": len(catalogs_list) if catalogs_list else 0,
-            }
+        return Catalogs(
+            catalogs=catalogs_list or [],
+            links=pagination_links,
+            numberMatched=total_hits,
+            numberReturned=len(catalogs_list) if catalogs_list else 0,
         )
 
     async def get_catalog(
@@ -263,7 +297,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         token: str | None = None,
         request: Request | None = None,
         **kwargs,
-    ) -> JSONResponse:
+    ) -> Collections:
         """Get collections linked to a catalog.
 
         Args:
@@ -274,8 +308,9 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             **kwargs: Additional keyword arguments.
 
         Returns:
-            JSONResponse containing collections list, total count, and pagination info.
+            Collections object containing collections list, total count, and pagination info.
         """
+        logger.info(f"get_catalog_collections called with limit={limit}, token={token}")
         limit = limit or 10
         (
             collections_list,
@@ -287,6 +322,11 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             token=token,
             request=request,
         )
+
+        # Ensure we only return the requested number of collections
+        # (safety check in case database returns more than limit)
+        if collections_list and len(collections_list) > limit:
+            collections_list = collections_list[:limit]
 
         # Generate links dynamically for each collection in scoped context
         if request and collections_list:
@@ -346,18 +386,30 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                 # Remove internal metadata
                 collection.pop("parent_ids", None)
 
-        # Generate response-level links using CollectionSearchPagingLinks pattern
+        # Generate response-level links - always generate from scratch based on offset
+        # Don't rely on database's next_token as it may have empty body
+        offset = _parse_pagination_token(token)
+
+        # Check if there are more results
+        next_token_to_use = None
+        if total_hits and offset + len(collections_list) < total_hits:
+            # There are more results, generate next link
+            next_offset = offset + len(collections_list)
+            next_token_to_use = {
+                "rel": "next",
+                "type": "application/json",
+                "body": {"offset": next_offset},
+            }
+
         response_links = await CollectionSearchPagingLinks(
-            request=request, next=next_token, prev=None
+            request=request, next=next_token_to_use, prev=None
         ).get_links()
 
-        return JSONResponse(
-            content={
-                "collections": collections_list or [],
-                "links": response_links,
-                "numberMatched": total_hits,
-                "numberReturned": len(collections_list) if collections_list else 0,
-            }
+        return Collections(
+            collections=collections_list or [],
+            links=response_links,
+            numberMatched=total_hits,
+            numberReturned=len(collections_list) if collections_list else 0,
         )
 
     async def get_sub_catalogs(
@@ -367,7 +419,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         token: str | None = None,
         request: Request | None = None,
         **kwargs,
-    ) -> JSONResponse:
+    ) -> Catalogs:
         """Get all sub-catalogs of a specific catalog with pagination.
 
         Args:
@@ -378,7 +430,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             **kwargs: Additional keyword arguments.
 
         Returns:
-            JSONResponse containing sub-catalogs list, total count, and pagination info.
+            Catalogs object containing sub-catalogs list, total count, and pagination info.
 
         Raises:
             NotFoundError: If the parent catalog is not found.
@@ -393,6 +445,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         except Exception as e:
             raise NotFoundError(f"Catalog {catalog_id} not found") from e
 
+        logger.info(f"get_sub_catalogs called with limit={limit}, token={token}")
         limit = limit or 10
         catalogs_list, total_hits, next_token = await self.database.get_sub_catalogs(
             catalog_id=catalog_id,
@@ -401,7 +454,24 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             request=request,
         )
 
-        # Build links
+        # Generate links dynamically for each catalog in scoped context
+        if request and catalogs_list:
+            for catalog in catalogs_list:
+                sub_catalog_id = cast(str, catalog.get("id"))
+                parent_ids = catalog.get("parent_ids", [])
+
+                # Generate inferred links using SubCatalogLinks
+                catalog["links"] = await SubCatalogLinks(
+                    catalog_id=catalog_id,
+                    sub_catalog_id=sub_catalog_id,
+                    request=request,
+                    parent_ids=parent_ids,
+                ).get_links(extra_links=catalog.get("links"))
+
+                # Remove internal metadata
+                catalog.pop("parent_ids", None)
+
+        # Build response-level links
         links = []
         if request:
             links = await CatalogSubcatalogsLinks(
@@ -411,13 +481,11 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                 limit=limit,
             ).get_links()
 
-        return JSONResponse(
-            content={
-                "catalogs": catalogs_list or [],
-                "links": links,
-                "numberMatched": total_hits,
-                "numberReturned": len(catalogs_list) if catalogs_list else 0,
-            }
+        return Catalogs(
+            catalogs=catalogs_list or [],
+            links=links,
+            numberMatched=total_hits,
+            numberReturned=len(catalogs_list) if catalogs_list else 0,
         )
 
     async def create_sub_catalog(
@@ -597,8 +665,10 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         token: str | None = None,
         request: Request | None = None,
         **kwargs,
-    ) -> JSONResponse:
+    ) -> ItemCollection:
         """Get items from a collection in a catalog.
+
+        Follows the same pattern as core.py's item_collection method.
 
         Args:
             catalog_id: The ID of the catalog.
@@ -609,25 +679,54 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             **kwargs: Additional keyword arguments.
 
         Returns:
-            JSONResponse containing items as a FeatureCollection.
+            ItemCollection with items and pagination links.
         """
-        limit = limit or 10
-        items, total, next_token = await self.database.get_catalog_collection_items(
-            catalog_id=catalog_id,
-            collection_id=collection_id,
-            limit=limit,
-            token=token,
-            request=request,
-        )
-        return JSONResponse(
-            content={
+        if request is None:
+            return {
                 "type": "FeatureCollection",
-                "features": items or [],
+                "features": [],
                 "links": [],
-                "numberMatched": total,
-                "numberReturned": len(items) if items else 0,
+                "numberMatched": 0,
+                "numberReturned": 0,
             }
-        )
+
+        limit = limit or 10
+
+        # Build search request to get items from collection
+        search_query = {
+            "collections": [collection_id],
+            "limit": limit,
+        }
+
+        if token:
+            search_query["token"] = token
+
+        # Execute search and get full item collection with links
+        async with request.app.state.get_connection(request, "r") as conn:
+            q, p = render(
+                """
+                SELECT * FROM search(:search::text::jsonb);
+                """,
+                search=json.dumps(search_query),
+            )
+            item_collection = await conn.fetchval(q, *p) or {
+                "type": "FeatureCollection",
+                "features": [],
+                "links": [],
+            }
+
+        # Extract pagination tokens from links (following core.py pattern)
+        # The search function returns links with pagination info
+        extra_links = item_collection.get("links", [])
+
+        # Generate final links using ItemCollectionLinks with extra_links
+        links = await ItemCollectionLinks(
+            collection_id=collection_id, request=request
+        ).get_links(extra_links=extra_links)
+
+        item_collection["links"] = links
+
+        return ItemCollection(**item_collection)
 
     async def get_catalog_collection_item(
         self,
@@ -664,7 +763,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         token: str | None = None,
         request: Request | None = None,
         **kwargs,
-    ) -> JSONResponse:
+    ) -> Children:
         """Get all children (catalogs and collections) of a catalog.
 
         Args:
@@ -675,8 +774,9 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             **kwargs: Additional keyword arguments.
 
         Returns:
-            JSONResponse containing children list, total count, and pagination info.
+            Children object containing children list, total count, and pagination info.
         """
+        logger.info(f"get_catalog_children called with limit={limit}, token={token}")
         limit = limit or 10
         children_list, total_hits, next_token = await self.database.get_catalog_children(
             catalog_id=catalog_id,
@@ -684,13 +784,33 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             token=token,
             request=request,
         )
-        return JSONResponse(
-            content={
-                "children": children_list or [],
-                "links": [],
-                "numberMatched": total_hits,
-                "numberReturned": len(children_list) if children_list else 0,
-            }
+
+        # Generate pagination links - always generate from scratch based on offset
+        # Don't rely on database's next_token as it may have empty body
+        links = []
+        if request:
+            offset = _parse_pagination_token(token)
+
+            # Check if there are more results
+            next_token_to_use = None
+            if total_hits and offset + len(children_list) < total_hits:
+                # There are more results, generate next link
+                next_offset = offset + len(children_list)
+                next_token_to_use = {
+                    "rel": "next",
+                    "type": "application/json",
+                    "body": {"offset": next_offset},
+                }
+
+            links = await CollectionSearchPagingLinks(
+                request=request, next=next_token_to_use, prev=None
+            ).get_links()
+
+        return Children(
+            children=children_list or [],
+            links=links,
+            numberMatched=total_hits,
+            numberReturned=len(children_list) if children_list else 0,
         )
 
     async def get_catalog_conformance(

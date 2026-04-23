@@ -137,6 +137,87 @@ class CatalogLinks(BaseLinks):
 
 
 @attr.s
+class SubCatalogLinks(BaseLinks):
+    """Create inferred links for a single sub-catalog in a scoped context.
+
+    Generates self, parent, and root links for a sub-catalog accessed through
+    a parent catalog endpoint.
+
+    Attributes:
+        catalog_id: The ID of the parent catalog.
+        sub_catalog_id: The ID of the sub-catalog.
+        parent_ids: List of parent catalog IDs (for poly-hierarchy).
+    """
+
+    catalog_id: str = attr.ib()
+    sub_catalog_id: str = attr.ib()
+    parent_ids: list[str] = attr.ib(kw_only=True, factory=list)
+
+    def link_self(self) -> dict:
+        """Return the self link pointing to this sub-catalog in scoped context.
+
+        Returns:
+            A link dict with rel='self' pointing to the scoped sub-catalog.
+        """
+        return {
+            "rel": Relations.self.value,
+            "type": MimeTypes.json.value,
+            "href": self.resolve(
+                f"catalogs/{self.catalog_id}/catalogs/{self.sub_catalog_id}"
+            ),
+        }
+
+    def link_parent(self) -> dict:
+        """Create the `parent` link pointing to the parent catalog.
+
+        Returns:
+            A link dict with rel='parent' pointing to the parent catalog.
+        """
+        return {
+            "rel": Relations.parent.value,
+            "type": MimeTypes.json.value,
+            "href": self.resolve(f"catalogs/{self.catalog_id}"),
+            "title": self.catalog_id,
+        }
+
+    def link_root(self) -> dict:
+        """Return the root catalog link.
+
+        Returns:
+            A link dict with rel='root' pointing to the global root.
+        """
+        return {
+            "rel": Relations.root.value,
+            "type": MimeTypes.json.value,
+            "href": self.base_url,
+        }
+
+    def link_related(self) -> list[dict] | None:
+        """Create related links for alternative parents (poly-hierarchy).
+
+        Returns:
+            A list of link dicts with rel='related' for other parents, or None.
+        """
+        if not self.parent_ids or len(self.parent_ids) <= 1:
+            return None
+
+        related_links = []
+        for parent_id in self.parent_ids:
+            if parent_id != self.catalog_id:  # Don't link to self
+                related_links.append(
+                    {
+                        "rel": "related",
+                        "type": MimeTypes.json.value,
+                        "href": self.resolve(
+                            f"catalogs/{parent_id}/catalogs/{self.sub_catalog_id}"
+                        ),
+                        "title": f"Catalog in {parent_id}",
+                    }
+                )
+        return related_links if related_links else None
+
+
+@attr.s
 class CatalogSubcatalogsLinks(BaseLinks):
     """Create inferred links for sub-catalogs listing.
 
