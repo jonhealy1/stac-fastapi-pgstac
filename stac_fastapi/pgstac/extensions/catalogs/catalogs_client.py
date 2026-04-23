@@ -6,13 +6,12 @@ from typing import Any, cast
 
 import attr
 from buildpg import render
-from fastapi import Request
 from stac_fastapi.types import stac as stac_types
 from stac_fastapi.types.errors import NotFoundError
 from stac_fastapi.types.stac import ItemCollection
 from stac_fastapi_catalogs_extension.client import AsyncBaseCatalogsClient
-from stac_fastapi_catalogs_extension.types import Catalogs, Children
-from stac_pydantic.api.collections import Collections
+from stac_fastapi_catalogs_extension.types import Children
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from stac_fastapi.pgstac.extensions.catalogs.catalogs_database_logic import (
@@ -28,6 +27,21 @@ from stac_fastapi.pgstac.models.links import (
     ItemCollectionLinks,
     filter_links,
 )
+
+
+def _remove_null_titles(obj: Any) -> Any:
+    """Recursively remove title fields that are None from dicts and lists."""
+    if isinstance(obj, dict):
+        return {
+            k: _remove_null_titles(v)
+            for k, v in obj.items()
+            if not (k == "title" and v is None)
+        }
+    elif isinstance(obj, list):
+        return [_remove_null_titles(item) for item in obj]
+    else:
+        return obj
+
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +62,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         token: str | None = None,
         request: Request | None = None,
         **kwargs,
-    ) -> Catalogs:
+    ) -> JSONResponse:
         """Get all catalogs with pagination.
 
         Args:
@@ -65,16 +79,13 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             offset = request.query_params.get("offset")
             if offset:
                 token = offset
-                print(f"DEBUG: Using offset from query params: token={token}")
 
-        print(f"DEBUG: get_catalogs called with limit={limit}, token={token}")
         limit = limit or 10
         catalogs_list, total_hits, next_token = await self.database.get_all_catalogs(
             token=token,
             limit=limit,
             request=request,
         )
-        print(f"DEBUG: got {len(catalogs_list)} catalogs, total_hits={total_hits}")
 
         # Generate links dynamically for each catalog
         if request and catalogs_list:
@@ -129,12 +140,19 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             request=request, next=next_token_to_use, prev=None
         ).get_links()
 
-        return Catalogs(
-            catalogs=catalogs_list or [],
-            links=pagination_links,
-            numberMatched=total_hits,
-            numberReturned=len(catalogs_list) if catalogs_list else 0,
-        )
+        # # Remove title field from response links
+        # pagination_links = [
+        #     {k: v for k, v in link.items() if k != "title"}
+        #     for link in pagination_links
+        # ]
+
+        result_dict = {
+            "catalogs": catalogs_list or [],
+            "links": pagination_links,
+            "numberMatched": total_hits,
+            "numberReturned": len(catalogs_list) if catalogs_list else 0,
+        }
+        return JSONResponse(_remove_null_titles(result_dict))
 
     async def get_catalog(
         self, catalog_id: str, request: Request | None = None, **kwargs
@@ -357,7 +375,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         token: str | None = None,
         request: Request | None = None,
         **kwargs,
-    ) -> Collections:
+    ) -> JSONResponse:
         """Get collections linked to a catalog.
 
         Args:
@@ -433,6 +451,11 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             request=request, next=next_token_to_use, prev=None
         ).get_links()
 
+        # Remove title field from response links
+        response_links = [
+            {k: v for k, v in link.items() if k != "title"} for link in response_links
+        ]
+
         # Add parent link to response (root is already added by CollectionSearchPagingLinks)
         if request:
             # Check if parent link already exists
@@ -443,16 +466,16 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                         "type": "application/json",
                         "href": str(request.base_url).rstrip("/")
                         + f"/catalogs/{catalog_id}",
-                        "title": "Parent Catalog",
                     }
                 )
 
-        return Collections(
-            collections=collections_list or [],
-            links=response_links,
-            numberMatched=total_hits,
-            numberReturned=len(collections_list) if collections_list else 0,
-        )
+        result_dict = {
+            "collections": collections_list or [],
+            "links": response_links,
+            "numberMatched": total_hits,
+            "numberReturned": len(collections_list) if collections_list else 0,
+        }
+        return JSONResponse(_remove_null_titles(result_dict))
 
     async def get_sub_catalogs(
         self,
@@ -461,7 +484,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         token: str | None = None,
         request: Request | None = None,
         **kwargs,
-    ) -> Catalogs:
+    ) -> JSONResponse:
         """Get all sub-catalogs of a specific catalog with pagination.
 
         Args:
@@ -555,6 +578,11 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             request=request, next=next_token_to_use, prev=None
         ).get_links()
 
+        # Remove title field from response links
+        pagination_links = [
+            {k: v for k, v in link.items() if k != "title"} for link in pagination_links
+        ]
+
         # Add parent link to response (root is already added by CollectionSearchPagingLinks)
         if request:
             # Check if parent link already exists
@@ -565,16 +593,16 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                         "type": "application/json",
                         "href": str(request.base_url).rstrip("/")
                         + f"/catalogs/{catalog_id}",
-                        "title": "Parent Catalog",
                     }
                 )
 
-        return Catalogs(
-            catalogs=catalogs_list or [],
-            links=pagination_links,
-            numberMatched=total_hits,
-            numberReturned=len(catalogs_list) if catalogs_list else 0,
-        )
+        result_dict = {
+            "catalogs": catalogs_list or [],
+            "links": pagination_links,
+            "numberMatched": total_hits,
+            "numberReturned": len(catalogs_list) if catalogs_list else 0,
+        }
+        return JSONResponse(_remove_null_titles(result_dict))
 
     async def create_sub_catalog(
         self, catalog_id: str, catalog: dict, request: Request | None = None, **kwargs
@@ -732,18 +760,28 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             request: The FastAPI request object.
             **kwargs: Additional keyword arguments.
         """
-        collection = await self.database.get_catalog_collection(
+        await self.database.unlink_collection(
             catalog_id=catalog_id,
             collection_id=collection_id,
             request=request,
         )
-        if "parent_ids" in collection:
-            collection["parent_ids"] = [
-                pid for pid in collection["parent_ids"] if pid != catalog_id
-            ]
-        await self.database.update_collection(
-            collection_id, collection, refresh=True, request=request
-        )
+
+    def _extract_pagination_tokens(
+        self, links: list[dict]
+    ) -> tuple[str | None, str | None]:
+        """Extract next and prev tokens from search links."""
+        next_token = None
+        prev_token = None
+        for link in links:
+            if link.get("rel") == "next" and "token=" in link.get("href", ""):
+                href = link.get("href", "")
+                if "token=" in href:
+                    next_token = href.split("token=")[1].split("&")[0]
+            elif link.get("rel") == "prev" and "token=" in link.get("href", ""):
+                href = link.get("href", "")
+                if "token=" in href:
+                    prev_token = href.split("token=")[1].split("&")[0]
+        return next_token, prev_token
 
     async def get_catalog_collection_items(
         self,
@@ -778,6 +816,15 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                 "numberReturned": 0,
             }
 
+        # Check if limit is in query params
+        if request and not limit:
+            limit_param = request.query_params.get("limit")
+            if limit_param:
+                try:
+                    limit = int(limit_param)
+                except (ValueError, TypeError):
+                    limit = None
+
         limit = limit or 10
 
         # Build search request to get items from collection
@@ -803,14 +850,35 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                 "links": [],
             }
 
-        # Extract pagination tokens from links (following core.py pattern)
-        # The search function returns links with pagination info
+        # Extract pagination tokens from search links
         extra_links = item_collection.get("links", [])
+        next_token, prev_token = self._extract_pagination_tokens(extra_links)
 
-        # Generate final links using ItemCollectionLinks with extra_links
+        # Generate pagination links for the scoped endpoint
+        from stac_fastapi.pgstac.models.links import PagingLinks
+
+        pagination_links = await PagingLinks(
+            request=request,
+            next=next_token,
+            prev=prev_token,
+        ).get_links()
+
+        # Generate other links using ItemCollectionLinks
         links = await ItemCollectionLinks(
             collection_id=collection_id, request=request
-        ).get_links(extra_links=extra_links)
+        ).get_links(extra_links=[])
+
+        # Rewrite self link to point to scoped endpoint
+        for link in links:
+            if link.get("rel") == "self":
+                link["href"] = (
+                    f"{str(request.base_url).rstrip('/')}/catalogs/{catalog_id}/collections/{collection_id}/items"
+                )
+                if limit != 10:  # Only add limit if it's not the default
+                    link["href"] += f"?limit={limit}"
+
+        # Combine pagination links with other links
+        links.extend(pagination_links)
 
         item_collection["links"] = links
 
@@ -983,9 +1051,8 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             request: The FastAPI request object.
             **kwargs: Additional keyword arguments.
         """
-        sub_catalog = await self.database.find_catalog(sub_catalog_id, request=request)
-        if "parent_ids" in sub_catalog:
-            sub_catalog["parent_ids"] = [
-                pid for pid in sub_catalog["parent_ids"] if pid != catalog_id
-            ]
-        await self.database.create_catalog(sub_catalog, refresh=True, request=request)
+        await self.database.unlink_sub_catalog(
+            catalog_id=catalog_id,
+            sub_catalog_id=sub_catalog_id,
+            request=request,
+        )

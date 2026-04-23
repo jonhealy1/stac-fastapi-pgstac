@@ -78,7 +78,6 @@ class CatalogLinks(BaseLinks):
                 "rel": "child",
                 "type": MimeTypes.json.value,
                 "href": self.resolve(f"catalogs/{child_id}"),
-                "title": child_id,
             }
             for child_id in self.child_catalog_ids
         ]
@@ -93,7 +92,6 @@ class CatalogLinks(BaseLinks):
             "rel": Relations.root.value,
             "type": MimeTypes.json.value,
             "href": self.base_url,
-            "title": "Root Catalog",
         }
 
     def link_data(self) -> dict:
@@ -106,7 +104,6 @@ class CatalogLinks(BaseLinks):
             "rel": "data",
             "type": MimeTypes.json.value,
             "href": self.resolve(f"catalogs/{self.catalog_id}/collections"),
-            "title": "Collections",
         }
 
     def link_catalogs(self) -> dict:
@@ -119,7 +116,6 @@ class CatalogLinks(BaseLinks):
             "rel": "catalogs",
             "type": MimeTypes.json.value,
             "href": self.resolve(f"catalogs/{self.catalog_id}/catalogs"),
-            "title": "Sub-Catalogs",
         }
 
     def link_children(self) -> dict:
@@ -132,7 +128,6 @@ class CatalogLinks(BaseLinks):
             "rel": "children",
             "type": MimeTypes.json.value,
             "href": self.resolve(f"catalogs/{self.catalog_id}/children"),
-            "title": "All Children",
         }
 
 
@@ -182,7 +177,6 @@ class ChildLinks(BaseLinks):
             "rel": Relations.parent.value,
             "type": MimeTypes.json.value,
             "href": self.resolve(f"catalogs/{self.catalog_id}"),
-            "title": self.catalog_id,
         }
 
     def link_root(self) -> dict:
@@ -221,7 +215,6 @@ class ChildLinks(BaseLinks):
                         "rel": "related",
                         "type": MimeTypes.json.value,
                         "href": href,
-                        "title": f"Child in {parent_id}",
                     }
                 )
         return related_links if related_links else None
@@ -268,7 +261,6 @@ class SubCatalogLinks(BaseLinks):
             "rel": Relations.parent.value,
             "type": MimeTypes.json.value,
             "href": self.resolve(f"catalogs/{self.catalog_id}"),
-            "title": self.catalog_id,
         }
 
     def link_root(self) -> dict:
@@ -302,7 +294,6 @@ class SubCatalogLinks(BaseLinks):
                         "href": self.resolve(
                             f"catalogs/{parent_id}/catalogs/{self.sub_catalog_id}"
                         ),
-                        "title": f"Catalog in {parent_id}",
                     }
                 )
         return related_links if related_links else None

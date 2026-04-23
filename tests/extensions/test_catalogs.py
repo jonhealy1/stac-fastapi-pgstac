@@ -805,7 +805,13 @@ async def test_unlink_sub_catalog(app_client):
     resp = await app_client.delete("/catalogs/parent-for-unlink/catalogs/sub-for-unlink")
     assert resp.status_code == 204
 
-    # Verify sub-catalog still exists (should be adopted to root or remain)
+    # Verify sub-catalog is no longer linked to parent
+    resp = await app_client.get("/catalogs/parent-for-unlink/catalogs")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert not any(cat.get("id") == "sub-for-unlink" for cat in data["catalogs"])
+
+    # Verify sub-catalog still exists (should be adopted to root)
     resp = await app_client.get("/catalogs/sub-for-unlink")
     assert resp.status_code == 200
 

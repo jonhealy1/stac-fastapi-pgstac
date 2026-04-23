@@ -723,8 +723,15 @@ class CatalogsDatabaseLogic:
             # If no other parents, adopt to root (empty parent_ids means root)
             sub_catalog["parent_ids"] = parent_ids
 
-            # Update the catalog
-            await self.create_catalog(sub_catalog, refresh=True, request=request)
+            # Update the catalog using direct SQL to preserve parent_ids changes
+            async with request.app.state.get_connection(request, "w") as conn:
+                q, p = render(
+                    """
+                    SELECT * FROM update_collection(:item::text::jsonb);
+                    """,
+                    item=json.dumps(sub_catalog),
+                )
+                await conn.fetchval(q, *p)
             logger.info(f"Unlinked sub-catalog {sub_catalog_id} from parent {catalog_id}")
         except Exception as e:
             logger.warning(f"Error unlinking sub-catalog: {e}")
@@ -760,10 +767,15 @@ class CatalogsDatabaseLogic:
             # If no other parents, adopt to root (empty parent_ids means root)
             collection["parent_ids"] = parent_ids
 
-            # Update the collection
-            await self.update_collection(
-                collection_id, collection, refresh=True, request=request
-            )
+            # Update the collection using direct SQL to preserve parent_ids changes
+            async with request.app.state.get_connection(request, "w") as conn:
+                q, p = render(
+                    """
+                    SELECT * FROM update_collection(:item::text::jsonb);
+                    """,
+                    item=json.dumps(collection),
+                )
+                await conn.fetchval(q, *p)
             logger.info(f"Unlinked collection {collection_id} from catalog {catalog_id}")
         except Exception as e:
             logger.warning(f"Error unlinking collection: {e}")
