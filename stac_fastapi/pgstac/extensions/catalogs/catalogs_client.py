@@ -81,7 +81,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                 token = offset_param
 
         limit = limit or 10
-        catalogs_list, total_hits, next_token = await self.database.get_all_catalogs(
+        catalogs_list, total_hits, _ = await self.database.get_all_catalogs(
             token=token,
             limit=limit,
             request=request,
@@ -123,28 +123,24 @@ class CatalogsClient(AsyncBaseCatalogsClient):
 
         # Generate pagination links - always generate from scratch based on offset
         # Don't rely on database's next_token as it may have empty body
-        offset: int = _parse_pagination_token(token)
+        pagination_links: list[dict] = []
+        if request:
+            offset: int = _parse_pagination_token(token)
 
-        # Check if there are more results
-        next_token_to_use = None
-        if total_hits and offset + len(catalogs_list) < total_hits:
-            # There are more results, generate next link
-            next_offset = offset + len(catalogs_list)
-            next_token_to_use = {
-                "rel": "next",
-                "type": "application/json",
-                "body": {"offset": next_offset},
-            }
+            # Check if there are more results
+            next_token_to_use = None
+            if total_hits and offset + len(catalogs_list) < total_hits:
+                # There are more results, generate next link
+                next_offset = offset + len(catalogs_list)
+                next_token_to_use = {
+                    "rel": "next",
+                    "type": "application/json",
+                    "body": {"offset": next_offset},
+                }
 
-        pagination_links = await CollectionSearchPagingLinks(
-            request=request, next=next_token_to_use, prev=None
-        ).get_links()
-
-        # # Remove title field from response links
-        # pagination_links = [
-        #     {k: v for k, v in link.items() if k != "title"}
-        #     for link in pagination_links
-        # ]
+            pagination_links = await CollectionSearchPagingLinks(
+                request=request, next=next_token_to_use, prev=None
+            ).get_links()
 
         result_dict = {
             "catalogs": catalogs_list or [],
@@ -454,7 +450,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         (
             collections_list,
             total_hits,
-            next_token,
+            _,
         ) = await self.database.get_catalog_collections(
             catalog_id=catalog_id,
             limit=limit,
@@ -538,7 +534,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
 
         limit, token = self._extract_limit_and_token(limit, token, request)
 
-        catalogs_list, total_hits, next_token = await self.database.get_sub_catalogs(
+        catalogs_list, total_hits, _ = await self.database.get_sub_catalogs(
             catalog_id=catalog_id,
             limit=limit,
             token=token,
@@ -843,7 +839,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
 
         item_collection["links"] = links
 
-        return cast(ItemCollection, ItemCollection(**item_collection))
+        return cast(ItemCollection, item_collection)
 
     async def get_catalog_collection_item(
         self,
@@ -901,7 +897,7 @@ class CatalogsClient(AsyncBaseCatalogsClient):
 
         logger.info(f"get_catalog_children called with limit={limit}, token={token}")
         limit = limit or 10
-        children_list, total_hits, next_token = await self.database.get_catalog_children(
+        children_list, total_hits, _ = await self.database.get_catalog_children(
             catalog_id=catalog_id,
             limit=limit,
             token=token,
