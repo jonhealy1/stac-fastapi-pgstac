@@ -376,6 +376,15 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             if offset:
                 token = offset
 
+        # Check if limit is in query params
+        if request and not limit:
+            limit_param = request.query_params.get("limit")
+            if limit_param:
+                try:
+                    limit = int(limit_param)
+                except (ValueError, TypeError):
+                    limit = None
+
         logger.info(f"get_catalog_collections called with limit={limit}, token={token}")
         limit = limit or 10
         (
@@ -389,6 +398,10 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             request=request,
         )
 
+        # Get offset BEFORE truncating
+        offset = _parse_pagination_token(token)
+        original_count = len(collections_list) if collections_list else 0
+
         # Ensure we only return the requested number of collections
         # (safety check in case database returns more than limit)
         if collections_list and len(collections_list) > limit:
@@ -400,40 +413,39 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                 self._rewrite_collection_links(collection, catalog_id, request)
 
         # Generate response-level links - always generate from scratch based on offset
-        offset = _parse_pagination_token(token)
-
-        # Check if there are more results
+        # Check if there are more results using the ORIGINAL count from database
         next_token_to_use = None
-        if total_hits and offset + len(collections_list) < total_hits:
-            next_offset = offset + len(collections_list)
+        if total_hits and offset + original_count < total_hits:
+            # There are more results, generate next link
+            next_offset = offset + len(
+                collections_list
+            )  # Use truncated count for next offset
             next_token_to_use = {
                 "rel": "next",
                 "type": "application/json",
                 "body": {"offset": next_offset},
             }
+            logger.info(
+                f"Generating next link: offset={next_offset}, original_count={original_count}, total_hits={total_hits}"
+            )
 
         response_links = await CollectionSearchPagingLinks(
             request=request, next=next_token_to_use, prev=None
         ).get_links()
 
-        # Add parent and root links to response
+        # Add parent link to response (root is already added by CollectionSearchPagingLinks)
         if request:
-            response_links.extend(
-                [
+            # Check if parent link already exists
+            if not any(link.get("rel") == "parent" for link in response_links):
+                response_links.append(
                     {
                         "rel": "parent",
                         "type": "application/json",
                         "href": str(request.base_url).rstrip("/")
                         + f"/catalogs/{catalog_id}",
                         "title": "Parent Catalog",
-                    },
-                    {
-                        "rel": "root",
-                        "type": "application/json",
-                        "href": str(request.base_url).rstrip("/"),
-                    },
-                ]
-            )
+                    }
+                )
 
         return Collections(
             collections=collections_list or [],
@@ -481,6 +493,15 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             if offset:
                 token = offset
 
+        # Check if limit is in query params
+        if request and not limit:
+            limit_param = request.query_params.get("limit")
+            if limit_param:
+                try:
+                    limit = int(limit_param)
+                except (ValueError, TypeError):
+                    limit = None
+
         logger.info(f"get_sub_catalogs called with limit={limit}, token={token}")
         limit = limit or 10
         catalogs_list, total_hits, next_token = await self.database.get_sub_catalogs(
@@ -489,6 +510,15 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             token=token,
             request=request,
         )
+
+        # Get offset and original count BEFORE truncating
+        offset = _parse_pagination_token(token)
+        original_count = len(catalogs_list) if catalogs_list else 0
+
+        # Ensure we only return the requested number of catalogs
+        # (safety check in case database returns more than limit)
+        if catalogs_list and len(catalogs_list) > limit:
+            catalogs_list = catalogs_list[:limit]
 
         # Generate links dynamically for each catalog in scoped context
         if request and catalogs_list:
@@ -508,14 +538,13 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                 catalog.pop("parent_ids", None)
 
         # Generate pagination links - always generate from scratch based on offset
-        # Don't rely on database's next_token as it may have empty body
-        offset = _parse_pagination_token(token)
-
-        # Check if there are more results
+        # Check if there are more results using the ORIGINAL count from database
         next_token_to_use = None
-        if total_hits and offset + len(catalogs_list) < total_hits:
+        if total_hits and offset + original_count < total_hits:
             # There are more results, generate next link
-            next_offset = offset + len(catalogs_list)
+            next_offset = offset + len(
+                catalogs_list
+            )  # Use truncated count for next offset
             next_token_to_use = {
                 "rel": "next",
                 "type": "application/json",
@@ -526,24 +555,19 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             request=request, next=next_token_to_use, prev=None
         ).get_links()
 
-        # Add parent and root links to response
+        # Add parent link to response (root is already added by CollectionSearchPagingLinks)
         if request:
-            pagination_links.extend(
-                [
+            # Check if parent link already exists
+            if not any(link.get("rel") == "parent" for link in pagination_links):
+                pagination_links.append(
                     {
                         "rel": "parent",
                         "type": "application/json",
                         "href": str(request.base_url).rstrip("/")
                         + f"/catalogs/{catalog_id}",
                         "title": "Parent Catalog",
-                    },
-                    {
-                        "rel": "root",
-                        "type": "application/json",
-                        "href": str(request.base_url).rstrip("/"),
-                    },
-                ]
-            )
+                    }
+                )
 
         return Catalogs(
             catalogs=catalogs_list or [],
