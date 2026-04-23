@@ -20,7 +20,7 @@ from stac_fastapi.pgstac.extensions.catalogs.catalogs_database_logic import (
 )
 from stac_fastapi.pgstac.extensions.catalogs.catalogs_links import (
     CatalogLinks,
-    CatalogSubcatalogsLinks,
+    ChildLinks,
     SubCatalogLinks,
 )
 from stac_fastapi.pgstac.models.links import (
@@ -310,6 +310,12 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         Returns:
             Collections object containing collections list, total count, and pagination info.
         """
+        # Check if offset is in query params (from pagination link)
+        if request and not token:
+            offset = request.query_params.get("offset")
+            if offset:
+                token = offset
+
         logger.info(f"get_catalog_collections called with limit={limit}, token={token}")
         limit = limit or 10
         (
@@ -445,6 +451,12 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         except Exception as e:
             raise NotFoundError(f"Catalog {catalog_id} not found") from e
 
+        # Check if offset is in query params (from pagination link)
+        if request and not token:
+            offset = request.query_params.get("offset")
+            if offset:
+                token = offset
+
         logger.info(f"get_sub_catalogs called with limit={limit}, token={token}")
         limit = limit or 10
         catalogs_list, total_hits, next_token = await self.database.get_sub_catalogs(
@@ -471,19 +483,28 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                 # Remove internal metadata
                 catalog.pop("parent_ids", None)
 
-        # Build response-level links
-        links = []
-        if request:
-            links = await CatalogSubcatalogsLinks(
-                catalog_id=catalog_id,
-                request=request,
-                next_token=next_token,
-                limit=limit,
-            ).get_links()
+        # Generate pagination links - always generate from scratch based on offset
+        # Don't rely on database's next_token as it may have empty body
+        offset = _parse_pagination_token(token)
+
+        # Check if there are more results
+        next_token_to_use = None
+        if total_hits and offset + len(catalogs_list) < total_hits:
+            # There are more results, generate next link
+            next_offset = offset + len(catalogs_list)
+            next_token_to_use = {
+                "rel": "next",
+                "type": "application/json",
+                "body": {"offset": next_offset},
+            }
+
+        pagination_links = await CollectionSearchPagingLinks(
+            request=request, next=next_token_to_use, prev=None
+        ).get_links()
 
         return Catalogs(
             catalogs=catalogs_list or [],
-            links=links,
+            links=pagination_links,
             numberMatched=total_hits,
             numberReturned=len(catalogs_list) if catalogs_list else 0,
         )
@@ -776,6 +797,12 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         Returns:
             Children object containing children list, total count, and pagination info.
         """
+        # Check if offset is in query params (from pagination link)
+        if request and not token:
+            offset = request.query_params.get("offset")
+            if offset:
+                token = offset
+
         logger.info(f"get_catalog_children called with limit={limit}, token={token}")
         limit = limit or 10
         children_list, total_hits, next_token = await self.database.get_catalog_children(
@@ -784,6 +811,27 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             token=token,
             request=request,
         )
+
+        # Generate links dynamically for each child in scoped context
+        if request and children_list:
+            for child in children_list:
+                child_id = cast(str, child.get("id"))
+                child_type = child.get(
+                    "type", "Catalog"
+                )  # Default to Catalog if not specified
+                parent_ids = child.get("parent_ids", [])
+
+                # Generate inferred links using ChildLinks
+                child["links"] = await ChildLinks(
+                    catalog_id=catalog_id,
+                    child_id=child_id,
+                    child_type=child_type,
+                    request=request,
+                    parent_ids=parent_ids,
+                ).get_links(extra_links=child.get("links"))
+
+                # Remove internal metadata
+                child.pop("parent_ids", None)
 
         # Generate pagination links - always generate from scratch based on offset
         # Don't rely on database's next_token as it may have empty body
