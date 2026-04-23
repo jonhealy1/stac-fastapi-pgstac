@@ -290,6 +290,66 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         """
         await self.database.delete_catalog(catalog_id, refresh=True, request=request)
 
+    def _rewrite_collection_links(
+        self,
+        collection: dict,
+        catalog_id: str,
+        request: Request,
+    ) -> None:
+        """Rewrite collection links for scoped context."""
+        collection_id = collection.get("id")
+        parent_ids = collection.get("parent_ids", [])
+
+        # For scoped endpoint, generate links pointing to this specific catalog
+        collection["links"] = [
+            {
+                "rel": "self",
+                "type": "application/json",
+                "href": str(request.url),
+            },
+            {
+                "rel": "parent",
+                "type": "application/json",
+                "href": str(request.base_url).rstrip("/") + f"/catalogs/{catalog_id}",
+                "title": catalog_id,
+            },
+            {
+                "rel": "root",
+                "type": "application/json",
+                "href": str(request.base_url).rstrip("/"),
+            },
+        ]
+
+        # Add custom links from storage (non-inferred)
+        if collection.get("links"):
+            custom_links = filter_links(collection.get("links", []))
+            collection["links"].extend(custom_links)
+
+        # Add related links for alternative parents (poly-hierarchy)
+        if parent_ids and len(parent_ids) > 1:
+            for parent_id in parent_ids:
+                if parent_id != catalog_id:  # Don't link to self
+                    related_href = (
+                        str(request.base_url).rstrip("/")
+                        + f"/catalogs/{parent_id}/collections/{collection_id}"
+                    )
+                    if not any(
+                        link.get("href") == related_href
+                        for link in collection["links"]
+                        if link.get("rel") == "related"
+                    ):
+                        collection["links"].append(
+                            {
+                                "rel": "related",
+                                "type": "application/json",
+                                "href": related_href,
+                                "title": f"Collection in {parent_id}",
+                            }
+                        )
+
+        # Remove internal metadata
+        collection.pop("parent_ids", None)
+
     async def get_catalog_collections(
         self,
         catalog_id: str,
@@ -337,69 +397,14 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         # Generate links dynamically for each collection in scoped context
         if request and collections_list:
             for collection in collections_list:
-                collection_id = collection.get("id")
-                parent_ids = collection.get("parent_ids", [])
-
-                # For scoped endpoint, generate links pointing to this specific catalog
-                collection["links"] = [
-                    {
-                        "rel": "self",
-                        "type": "application/json",
-                        "href": str(request.url),
-                    },
-                    {
-                        "rel": "parent",
-                        "type": "application/json",
-                        "href": str(request.base_url).rstrip("/")
-                        + f"/catalogs/{catalog_id}",
-                        "title": catalog_id,
-                    },
-                    {
-                        "rel": "root",
-                        "type": "application/json",
-                        "href": str(request.base_url).rstrip("/"),
-                    },
-                ]
-
-                # Add custom links from storage (non-inferred)
-                if collection.get("links"):
-                    custom_links = filter_links(collection.get("links", []))
-                    collection["links"].extend(custom_links)
-
-                # Add related links for alternative parents (poly-hierarchy)
-                if parent_ids and len(parent_ids) > 1:
-                    for parent_id in parent_ids:
-                        if parent_id != catalog_id:  # Don't link to self
-                            # Check if this related link already exists
-                            related_href = (
-                                str(request.base_url).rstrip("/")
-                                + f"/catalogs/{parent_id}/collections/{collection_id}"
-                            )
-                            if not any(
-                                link.get("href") == related_href
-                                for link in collection["links"]
-                                if link.get("rel") == "related"
-                            ):
-                                collection["links"].append(
-                                    {
-                                        "rel": "related",
-                                        "type": "application/json",
-                                        "href": related_href,
-                                        "title": f"Collection in {parent_id}",
-                                    }
-                                )
-
-                # Remove internal metadata
-                collection.pop("parent_ids", None)
+                self._rewrite_collection_links(collection, catalog_id, request)
 
         # Generate response-level links - always generate from scratch based on offset
-        # Don't rely on database's next_token as it may have empty body
         offset = _parse_pagination_token(token)
 
         # Check if there are more results
         next_token_to_use = None
         if total_hits and offset + len(collections_list) < total_hits:
-            # There are more results, generate next link
             next_offset = offset + len(collections_list)
             next_token_to_use = {
                 "rel": "next",
@@ -410,6 +415,25 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         response_links = await CollectionSearchPagingLinks(
             request=request, next=next_token_to_use, prev=None
         ).get_links()
+
+        # Add parent and root links to response
+        if request:
+            response_links.extend(
+                [
+                    {
+                        "rel": "parent",
+                        "type": "application/json",
+                        "href": str(request.base_url).rstrip("/")
+                        + f"/catalogs/{catalog_id}",
+                        "title": "Parent Catalog",
+                    },
+                    {
+                        "rel": "root",
+                        "type": "application/json",
+                        "href": str(request.base_url).rstrip("/"),
+                    },
+                ]
+            )
 
         return Collections(
             collections=collections_list or [],
@@ -501,6 +525,25 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         pagination_links = await CollectionSearchPagingLinks(
             request=request, next=next_token_to_use, prev=None
         ).get_links()
+
+        # Add parent and root links to response
+        if request:
+            pagination_links.extend(
+                [
+                    {
+                        "rel": "parent",
+                        "type": "application/json",
+                        "href": str(request.base_url).rstrip("/")
+                        + f"/catalogs/{catalog_id}",
+                        "title": "Parent Catalog",
+                    },
+                    {
+                        "rel": "root",
+                        "type": "application/json",
+                        "href": str(request.base_url).rstrip("/"),
+                    },
+                ]
+            )
 
         return Catalogs(
             catalogs=catalogs_list or [],
