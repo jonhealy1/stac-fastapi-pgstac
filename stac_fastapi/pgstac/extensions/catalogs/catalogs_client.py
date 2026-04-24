@@ -122,8 +122,6 @@ class CatalogsClient(AsyncBaseCatalogsClient):
                 # Remove internal metadata before returning
                 catalog.pop("parent_ids", None)
 
-        # Generate pagination links - always generate from scratch based on offset
-        # Don't rely on database's next_token as it may have empty body
         pagination_links: list[dict] = []
         if request:
             offset: int = _parse_pagination_token(token)
@@ -1013,12 +1011,21 @@ class CatalogsClient(AsyncBaseCatalogsClient):
 
         Returns:
             JSONResponse containing conformance classes.
+
+        Raises:
+            NotFoundError: If the catalog does not exist.
         """
+        # Validate that the catalog exists
+        if request:
+            await self.database.find_catalog(catalog_id, request=request)
+
         return JSONResponse(
             content={
                 "conformsTo": [
                     "https://api.stacspec.org/v1.0.0/core",
-                    "https://api.stacspec.org/v1.0.0/multi-tenant-catalogs",
+                    "https://api.stacspec.org/v1.0.0-beta.4/multi-tenant-catalogs",
+                    "https://api.stacspec.org/v1.0.0-beta.4/multi-tenant-catalogs/transaction",
+                    "https://api.stacspec.org/v1.0.0-rc.2/children",
                 ]
             }
         )
@@ -1035,7 +1042,14 @@ class CatalogsClient(AsyncBaseCatalogsClient):
 
         Returns:
             JSONResponse containing queryables.
+
+        Raises:
+            NotFoundError: If the catalog does not exist.
         """
+        # Validate that the catalog exists
+        if request:
+            await self.database.find_catalog(catalog_id, request=request)
+
         return JSONResponse(content={"queryables": []})
 
     async def unlink_sub_catalog(
