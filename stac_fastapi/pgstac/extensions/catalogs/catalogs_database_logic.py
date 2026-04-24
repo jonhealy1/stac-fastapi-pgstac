@@ -224,22 +224,27 @@ class CatalogsDatabaseLogic:
 
     async def create_catalog(
         self, catalog: dict[str, Any], refresh: bool = False, request: Any = None
-    ) -> None:
+    ) -> bool:
         """Create or update a catalog.
 
         Args:
             catalog: The catalog dictionary.
             refresh: Whether to refresh after creation.
             request: The FastAPI request object.
+
+        Returns:
+            True if creation was successful, False otherwise.
         """
         if request is None:
-            return
+            return False
 
         try:
             async with request.app.state.get_connection(request, "w") as conn:
                 await dbfunc(conn, "create_collection", dict(catalog))
+            return True
         except Exception as e:
             logger.warning(f"Error creating catalog: {e}")
+            return False
 
     async def update_catalog(
         self,
@@ -529,22 +534,27 @@ class CatalogsDatabaseLogic:
 
     async def create_collection(
         self, collection: dict[str, Any], refresh: bool = False, request: Any = None
-    ) -> None:
+    ) -> bool:
         """Create a collection.
 
         Args:
             collection: The collection dictionary.
             refresh: Whether to refresh after creation.
             request: The FastAPI request object.
+
+        Returns:
+            True if creation was successful, False otherwise.
         """
         if request is None:
-            return
+            return False
 
         try:
             async with request.app.state.get_connection(request, "w") as conn:
                 await dbfunc(conn, "create_collection", dict(collection))
+            return True
         except Exception as e:
             logger.warning(f"Error creating collection: {e}")
+            return False
 
     async def update_collection(
         self,

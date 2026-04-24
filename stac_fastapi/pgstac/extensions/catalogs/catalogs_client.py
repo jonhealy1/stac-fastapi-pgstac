@@ -216,6 +216,9 @@ class CatalogsClient(AsyncBaseCatalogsClient):
 
         Returns:
             JSONResponse containing the created catalog with dynamically generated links.
+
+        Raises:
+            HTTPException: 409 Conflict if catalog already exists.
         """
         # Convert Pydantic model to dict if needed
         catalog_dict = cast(
@@ -229,9 +232,29 @@ class CatalogsClient(AsyncBaseCatalogsClient):
         if "links" in catalog_dict:
             catalog_dict["links"] = filter_links(catalog_dict["links"])
 
-        await self.database.create_catalog(
+        # Check if catalog already exists
+        catalog_id = catalog_dict.get("id")
+        if catalog_id and request:
+            try:
+                existing = await self.database.find_catalog(catalog_id, request=request)
+                if existing:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Catalog {catalog_id} already exists",
+                    )
+            except NotFoundError:
+                # Catalog doesn't exist, proceed with creation
+                pass
+
+        success = await self.database.create_catalog(
             dict(catalog_dict), refresh=True, request=request
         )
+
+        if not success:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to create catalog {catalog_id}",
+            )
 
         # Generate links dynamically for response
         if request:
@@ -288,8 +311,8 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             else catalog,
         )
 
-        await self.database.create_catalog(
-            dict(catalog_dict), refresh=True, request=request
+        await self.database.update_catalog(
+            catalog_id, dict(catalog_dict), refresh=True, request=request
         )
         return catalog_dict
 
@@ -610,7 +633,14 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             if catalog_id not in parent_ids:
                 parent_ids.append(catalog_id)
             existing["parent_ids"] = parent_ids
-            await self.database.create_catalog(existing, refresh=True, request=request)
+            success = await self.database.create_catalog(
+                existing, refresh=True, request=request
+            )
+            if not success:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to link catalog {cat_id} to parent {catalog_id}",
+                )
             return JSONResponse(content=existing, status_code=201)
         except HTTPException:
             # Re-raise HTTP exceptions (like cycle detection errors)
@@ -619,9 +649,14 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             # Create new catalog
             catalog_dict["type"] = "Catalog"
             catalog_dict["parent_ids"] = [catalog_id]
-            await self.database.create_catalog(
+            success = await self.database.create_catalog(
                 catalog_dict, refresh=True, request=request
             )
+            if not success:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to create catalog {cat_id}",
+                ) from None
             return JSONResponse(content=catalog_dict, status_code=201)
 
     async def create_catalog_collection(
@@ -680,9 +715,14 @@ class CatalogsClient(AsyncBaseCatalogsClient):
             # Create new collection
             collection_dict["type"] = "Collection"
             collection_dict["parent_ids"] = [catalog_id]
-            await self.database.create_collection(
+            success = await self.database.create_collection(
                 collection_dict, refresh=True, request=request
             )
+            if not success:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to create collection {coll_id}",
+                ) from None
             return JSONResponse(content=collection_dict, status_code=201)
 
     async def get_catalog_collection(

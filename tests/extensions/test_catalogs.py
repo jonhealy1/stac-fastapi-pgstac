@@ -93,6 +93,40 @@ async def test_create_catalog(app_client):
 
 
 @pytest.mark.asyncio
+async def test_create_duplicate_catalog(app_client):
+    """Test that creating a duplicate catalog returns 409 Conflict."""
+    catalog_id = "duplicate-test-catalog"
+
+    # Create the first catalog
+    resp = await app_client.post(
+        "/catalogs",
+        json={
+            "id": catalog_id,
+            "type": "Catalog",
+            "description": "First catalog",
+            "stac_version": "1.0.0",
+            "links": [],
+        },
+    )
+    assert resp.status_code == 201
+
+    # Try to create the same catalog again
+    resp = await app_client.post(
+        "/catalogs",
+        json={
+            "id": catalog_id,
+            "type": "Catalog",
+            "description": "Duplicate catalog",
+            "stac_version": "1.0.0",
+            "links": [],
+        },
+    )
+    # Should return 409 Conflict
+    assert resp.status_code == 409
+    assert "already exists" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
 async def test_get_all_catalogs(app_client):
     """Test getting all catalogs."""
     # Create three catalogs
