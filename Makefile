@@ -16,6 +16,10 @@ runtests = docker compose -f compose.tests.yml run --rm tests
 image:
 	docker compose build
 
+.PHONY: image-tests
+image-tests:
+	docker compose -f compose.tests.yml build
+
 .PHONY: docker-run
 docker-run: image
 	docker compose up
