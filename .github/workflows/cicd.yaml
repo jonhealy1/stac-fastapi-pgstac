@@ -1,9 +1,5 @@
-name: stac-fastapi
+name: stac-fastapi downstream compatibility test
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 env:
